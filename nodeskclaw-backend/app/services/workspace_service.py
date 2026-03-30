@@ -549,11 +549,10 @@ async def _deploy_channel_plugin(inst: Instance, db: AsyncSession, workspace_id:
     except Exception as e:
         logger.warning("部署 learning plugin 失败（非致命）: instance=%s error=%s", inst.name, e)
 
-    try:
-        from app.services.llm_config_service import deploy_dingtalk_channel_plugin
-        await deploy_dingtalk_channel_plugin(inst, db)
-    except Exception as e:
-        logger.warning("部署 dingtalk plugin 失败（非致命）: instance=%s error=%s", inst.name, e)
+    # DingTalk plugin is deployed on-demand when dingtalk channel is configured
+    # via channel_config_service.write_channel_configs, not preemptively here.
+    # Preemptive deploy caused CrashLoopBackOff when kubectl exec file writes
+    # partially failed, leaving an incomplete plugin directory.
 
     try:
         from app.services.instance_service import restart_instance

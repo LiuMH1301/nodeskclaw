@@ -1075,8 +1075,20 @@ async def deploy_dingtalk_channel_plugin(
         logger.warning("DingTalk plugin source not found, skipping deployment")
         return
 
+    target_base = f".openclaw/extensions/{DINGTALK_PLUGIN_DIR}"
+
     async with remote_fs(instance, db) as fs:
-        await _deploy_dingtalk_plugin_files(fs, plugin_source)
+        try:
+            await _deploy_dingtalk_plugin_files(fs, plugin_source)
+            # Verify the manifest was written — if missing, OpenClaw will crash on startup
+            if not await fs.exists(f"{target_base}/openclaw.plugin.json"):
+                raise FileNotFoundError("dingtalk plugin manifest not written")
+        except Exception as e:
+            logger.warning(
+                "DingTalk plugin files deploy failed, cleaning up directory: %s", e,
+            )
+            await fs.remove(target_base)
+            return
 
         try:
             existing = await _read_config_file(fs)
