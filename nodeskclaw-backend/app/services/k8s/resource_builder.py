@@ -134,7 +134,7 @@ def build_pvc(
     return V1PersistentVolumeClaim(
         metadata=V1ObjectMeta(name=name, namespace=namespace, labels=labels),
         spec=V1PersistentVolumeClaimSpec(
-            access_modes=["ReadWriteMany"],
+            access_modes=["ReadWriteOnce"],
             resources=V1ResourceRequirements(requests={"storage": storage_size}),
             storage_class_name=storage_class,
         ),
