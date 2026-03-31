@@ -13,6 +13,7 @@ from app.core.deps import get_current_org, get_current_org_or_agent, get_db
 from app.models.base import not_deleted
 from app.models.corridor import CorridorHex, HexConnection, HumanHex, is_adjacent, ordered_pair
 from app.models.instance import Instance
+from app.models.node_card import NodeCard
 from app.models.workspace import Workspace
 from app.models.workspace_agent import WorkspaceAgent
 from app.models.workspace_member import WorkspaceMember
@@ -103,6 +104,18 @@ async def _is_hex_occupied(workspace_id: str, q: int, r: int, db: AsyncSession) 
         ).limit(1)
     )
     if human_q.scalar_one_or_none():
+        return True
+    # Fallback: check node_cards directly (catches orphaned rows from
+    # incomplete deletes that would violate uq_node_card_hex_pos)
+    card_q = await db.execute(
+        select(NodeCard.id).where(
+            NodeCard.workspace_id == workspace_id,
+            NodeCard.hex_q == q,
+            NodeCard.hex_r == r,
+            not_deleted(NodeCard),
+        ).limit(1)
+    )
+    if card_q.scalar_one_or_none():
         return True
     return False
 
