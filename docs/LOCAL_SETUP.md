@@ -203,7 +203,21 @@ You missed Step 2. The pod's `openclaw.json` has `localhost:4511` as the LLM end
 - Patch the config directly: `kubectl exec -n <namespace> <pod> --context kind-kind -- sed -i 's|http://localhost:4511|http://host.docker.internal:4511|g' /root/.openclaw/openclaw.json` then delete the pod
 - Or delete the PVC and redeploy the AI employee
 
+### AI employee not responding after backend restart
+Each AI employee maintains a persistent WebSocket tunnel to the backend. When the backend restarts, all tunnel connections are dropped. The pods detect this and reconnect with exponential backoff (1s, 2s, 4s, ... up to 30s), but during this window messages sent to an agent will be silently lost (sent to a dead-letter queue with no retry).
+
+After restarting the backend:
+1. **Wait ~30 seconds** for all pods to reconnect their tunnels
+2. Check the Overview page — agents should show **healthy** once tunnels are re-established
+3. If an agent still appears unreachable, delete the pod to force a fresh connection:
+```bash
+kubectl delete pod <pod-name> -n <namespace> --context kind-kind
+```
+
+> **Note:** The tunnel is between the pod and the backend process, not the browser. Refreshing the browser or logging in again does not affect tunnels. Only a backend restart breaks them.
+
 ### AI employee shows "Running (Unreachable)"
 The tunnel hasn't connected. Possible causes:
 1. **Not added to a workspace yet** — the tunnel client only activates after workspace assignment
-2. **NetworkPolicy blocking egress** — ensure `EGRESS_DENY_CIDRS` is empty and `EGRESS_ALLOW_PORTS` includes `4510,4511` in `.env` (see Step 1)
+2. **Backend was restarted** — see "AI employee not responding after backend restart" above
+3. **NetworkPolicy blocking egress** — ensure `EGRESS_DENY_CIDRS` is empty and `EGRESS_ALLOW_PORTS` includes `4510,4511` in `.env` (see Step 1)
