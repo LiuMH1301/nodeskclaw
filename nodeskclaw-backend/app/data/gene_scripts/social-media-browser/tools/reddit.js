@@ -160,8 +160,8 @@ async function submitPost(pool, page, { subreddit, title, body }) {
     return { error: "invalid_input", message: "Post title must be 1-300 characters." };
   }
 
-  if (!body) {
-    return { error: "invalid_input", message: "Post body is required." };
+  if (!body || body.length > 40_000) {
+    return { error: "invalid_input", message: "Post body must be 1-40000 characters." };
   }
 
   const url = `https://old.reddit.com/r/${subreddit}/submit`;
@@ -204,8 +204,8 @@ async function submitPost(pool, page, { subreddit, title, body }) {
 async function replyToPost(pool, page, { post_url, text }, urlValidator) {
   urlValidator.requireValidUrl(post_url, "reddit");
 
-  if (!text) {
-    return { error: "invalid_input", message: "Reply text is required." };
+  if (!text || text.length > 10_000) {
+    return { error: "invalid_input", message: "Reply text must be 1-10000 characters." };
   }
 
   // Convert to old.reddit.com for stable DOM

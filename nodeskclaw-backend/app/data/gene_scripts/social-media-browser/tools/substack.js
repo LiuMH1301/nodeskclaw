@@ -116,8 +116,8 @@ async function publishDraft(pool, page, { title, subtitle, body }) {
     return { error: "invalid_input", message: "Post title is required." };
   }
 
-  if (!body) {
-    return { error: "invalid_input", message: "Post body is required." };
+  if (!body || body.length > 100_000) {
+    return { error: "invalid_input", message: "Post body must be 1-100000 characters." };
   }
 
   // Navigate to the new post page via the Substack dashboard
