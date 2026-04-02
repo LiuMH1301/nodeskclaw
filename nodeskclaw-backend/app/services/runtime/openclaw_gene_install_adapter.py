@@ -99,6 +99,32 @@ class OpenClawGeneInstallAdapter(GeneInstallAdapter):
                 config[key] = val
         await self._write_config(fs, config)
 
+    async def sync_mcp_servers(self, fs: RemoteFS, mcp_records: list) -> None:
+        """Sync active InstanceMcpServer records into openclaw.json mcpServers section."""
+        try:
+            config = await self._read_config(fs)
+        except ValueError:
+            logger.warning("sync_mcp_servers: openclaw.json parse failed, skipping MCP sync")
+            return
+
+        mcp_servers: dict = {}
+        for rec in mcp_records:
+            if not rec.is_active:
+                continue
+            entry: dict = {"transport": rec.transport}
+            if rec.command:
+                entry["command"] = rec.command
+            if rec.url:
+                entry["url"] = rec.url
+            if rec.args:
+                entry["args"] = list(rec.args)
+            if rec.env:
+                entry["env"] = dict(rec.env)
+            mcp_servers[rec.name] = entry
+
+        config = {**config, "mcpServers": mcp_servers}
+        await self._write_config(fs, config)
+
     async def invalidate_cache(self, fs: RemoteFS, skill_name: str, event: str = "installed") -> None:
         from app.services.openclaw_session import (
             inject_evolution_notification,

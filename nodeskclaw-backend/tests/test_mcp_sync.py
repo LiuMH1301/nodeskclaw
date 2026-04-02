@@ -41,17 +41,16 @@ async def test_sync_mcp_servers_writes_config():
     adapter = OpenClawGeneInstallAdapter()
     fs = AsyncMock()
 
-    mcp_records = [
-        MagicMock(
-            name="social-media-browser",
-            transport="stdio",
-            command="node",
-            url=None,
-            args=["/root/.deskclaw/tools/social-media-browser/server.js"],
-            env={"COOKIES_PATH": "/root/.deskclaw/cookies/"},
-            is_active=True,
-        ),
-    ]
+    rec = MagicMock(
+        transport="stdio",
+        command="node",
+        url=None,
+        args=["/root/.deskclaw/tools/social-media-browser/server.js"],
+        env={"COOKIES_PATH": "/root/.deskclaw/cookies/"},
+        is_active=True,
+    )
+    rec.name = "social-media-browser"
+    mcp_records = [rec]
 
     fs.read_text = AsyncMock(return_value=json.dumps({"skills": {}}))
     fs.write_text = AsyncMock()
@@ -68,3 +67,84 @@ async def test_sync_mcp_servers_writes_config():
     assert srv["command"] == "node"
     assert srv["args"] == ["/root/.deskclaw/tools/social-media-browser/server.js"]
     assert srv["env"]["COOKIES_PATH"] == "/root/.deskclaw/cookies/"
+
+
+@pytest.mark.asyncio
+async def test_sync_mcp_servers_empty_clears_section():
+    """sync_mcp_servers with empty list should write empty mcpServers."""
+    adapter = OpenClawGeneInstallAdapter()
+    fs = AsyncMock()
+
+    existing_config = {
+        "skills": {},
+        "mcpServers": {
+            "old-server": {"transport": "stdio", "command": "old"}
+        },
+    }
+    fs.read_text = AsyncMock(return_value=json.dumps(existing_config))
+    fs.write_text = AsyncMock()
+
+    await adapter.sync_mcp_servers(fs, [])
+
+    config = json.loads(fs.write_text.call_args[0][1])
+    assert config["mcpServers"] == {}
+    # Existing config preserved
+    assert config["skills"] == {}
+
+
+@pytest.mark.asyncio
+async def test_sync_mcp_servers_filters_inactive():
+    """sync_mcp_servers should skip records with is_active=False."""
+    adapter = OpenClawGeneInstallAdapter()
+    fs = AsyncMock()
+
+    active_rec = MagicMock(
+        transport="stdio",
+        command="node",
+        url=None,
+        args=None,
+        env=None,
+        is_active=True,
+    )
+    active_rec.name = "active-server"
+
+    inactive_rec = MagicMock(
+        transport="stdio",
+        command="python",
+        url=None,
+        args=None,
+        env=None,
+        is_active=False,
+    )
+    inactive_rec.name = "inactive-server"
+
+    mcp_records = [active_rec, inactive_rec]
+
+    fs.read_text = AsyncMock(return_value=json.dumps({}))
+    fs.write_text = AsyncMock()
+
+    await adapter.sync_mcp_servers(fs, mcp_records)
+
+    config = json.loads(fs.write_text.call_args[0][1])
+    assert "active-server" in config["mcpServers"]
+    assert "inactive-server" not in config["mcpServers"]
+
+
+@pytest.mark.asyncio
+async def test_sync_mcp_servers_skips_on_corrupt_config():
+    """sync_mcp_servers should skip gracefully when openclaw.json is corrupt."""
+    adapter = OpenClawGeneInstallAdapter()
+    fs = AsyncMock()
+    fs.read_text = AsyncMock(return_value="NOT VALID JSON {{{")
+    fs.write_text = AsyncMock()
+
+    rec = MagicMock(transport="stdio", command="node",
+                    url=None, args=None, env=None, is_active=True)
+    rec.name = "test"
+    mcp_records = [rec]
+
+    # Should not raise
+    await adapter.sync_mcp_servers(fs, mcp_records)
+
+    # Should not write anything
+    fs.write_text.assert_not_called()
