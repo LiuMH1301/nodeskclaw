@@ -1,0 +1,6 @@
+{
+  "skill": {
+    "name": "trend-scout-playbook",
+    "description": "Behavioral playbook for the Trend Scout agent -- scanning and reporting social media trends"
+  }
+}
