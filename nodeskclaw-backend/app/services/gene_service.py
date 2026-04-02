@@ -2241,6 +2241,29 @@ async def _direct_uninstall(
                         await adapter.remove_skill(fs, skill_name)
                         await adapter.post_remove_cleanup(fs, skill_name)
 
+                        # Soft-delete MCP server records for this gene
+                        from app.models.instance_mcp_server import InstanceMcpServer
+
+                        mcp_rows = await db.execute(
+                            select(InstanceMcpServer).where(
+                                InstanceMcpServer.instance_id == instance_id,
+                                InstanceMcpServer.source_gene_id == gene_id,
+                                not_deleted(InstanceMcpServer),
+                            )
+                        )
+                        for mcp_row in mcp_rows.scalars().all():
+                            mcp_row.soft_delete()
+
+                        # Re-sync remaining active MCP servers to openclaw.json
+                        remaining_mcp = await db.execute(
+                            select(InstanceMcpServer).where(
+                                InstanceMcpServer.instance_id == instance_id,
+                                InstanceMcpServer.is_active.is_(True),
+                                not_deleted(InstanceMcpServer),
+                            )
+                        )
+                        await adapter.sync_mcp_servers(fs, list(remaining_mcp.scalars().all()))
+
                 ig.soft_delete()
                 if gene:
                     gene.install_count = max(0, gene.install_count - 1)
