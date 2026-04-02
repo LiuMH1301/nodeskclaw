@@ -40,6 +40,15 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 RUN --mount=type=cache,target=/root/.npm \
     npm install -g openclaw@${OPENCLAW_VERSION} @nodeskai/genehub
 
+# ---------- 预装 Playwright Chromium（社交媒体浏览器基因依赖）----------
+# Adds ~400MB but enables instant MCP server startup in pods
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+RUN npx playwright install --with-deps chromium \
+    && rm -rf /tmp/* /root/.cache/ms-playwright/.links
+
+# Chromium resource limits for MCP server use
+ENV PLAYWRIGHT_CHROMIUM_ARGS="--disable-dev-shm-usage --disable-gpu --no-sandbox --js-flags=--max-old-space-size=512"
+
 # ---------- 预置用户数据目录结构 ----------
 RUN mkdir -p /root/.openclaw/agents/main/sessions \
              /root/.openclaw/config \
