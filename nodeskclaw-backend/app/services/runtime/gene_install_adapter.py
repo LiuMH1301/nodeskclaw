@@ -59,7 +59,7 @@ class GeneInstallAdapter(ABC):
         """Post-removal cleanup: cache invalidation and uninstall notification."""
 
     @abstractmethod
-    async def sync_mcp_servers(self, fs: "RemoteFS", mcp_records: list) -> None:
+    async def sync_mcp_servers(self, fs: RemoteFS, mcp_records: list) -> None:
         """Sync active MCP server records into runtime config.
 
         Args:
