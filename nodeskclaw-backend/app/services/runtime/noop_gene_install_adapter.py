@@ -72,3 +72,6 @@ class NoopGeneInstallAdapter(GeneInstallAdapter):
             "(no runtime-specific cleanup logic)",
             skill_name,
         )
+
+    async def sync_mcp_servers(self, fs: RemoteFS, mcp_records: list) -> None:
+        logger.debug("NoopGeneInstallAdapter.sync_mcp_servers: skipped (noop runtime)")

@@ -33,3 +33,38 @@ async def test_deploy_scripts_creates_nested_directories():
     assert ".deskclaw/tools/social-media-browser/server.js" in write_paths
     assert ".deskclaw/tools/social-media-browser/tools/x.js" in write_paths
     assert ".deskclaw/tools/social-media-browser/tools/reddit.js" in write_paths
+
+
+@pytest.mark.asyncio
+async def test_sync_mcp_servers_writes_config():
+    """sync_mcp_servers should write mcpServers section into openclaw.json."""
+    adapter = OpenClawGeneInstallAdapter()
+    fs = AsyncMock()
+
+    mcp_records = [
+        MagicMock(
+            name="social-media-browser",
+            transport="stdio",
+            command="node",
+            url=None,
+            args=["/root/.deskclaw/tools/social-media-browser/server.js"],
+            env={"COOKIES_PATH": "/root/.deskclaw/cookies/"},
+            is_active=True,
+        ),
+    ]
+
+    fs.read_text = AsyncMock(return_value=json.dumps({"skills": {}}))
+    fs.write_text = AsyncMock()
+
+    await adapter.sync_mcp_servers(fs, mcp_records)
+
+    written = fs.write_text.call_args[0]
+    assert written[0] == ".openclaw/openclaw.json"
+    config = json.loads(written[1])
+    assert "mcpServers" in config
+    assert "social-media-browser" in config["mcpServers"]
+    srv = config["mcpServers"]["social-media-browser"]
+    assert srv["transport"] == "stdio"
+    assert srv["command"] == "node"
+    assert srv["args"] == ["/root/.deskclaw/tools/social-media-browser/server.js"]
+    assert srv["env"]["COOKIES_PATH"] == "/root/.deskclaw/cookies/"
