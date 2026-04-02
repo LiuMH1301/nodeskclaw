@@ -203,3 +203,77 @@ async def test_inject_mcp_servers_skips_existing():
     # Should NOT call db.add since record already exists
     assert db.add.call_count == 0
     assert db.flush.called
+
+
+@pytest.mark.asyncio
+async def test_sync_preserves_existing_config_and_adds_mcp():
+    """Full round-trip: existing openclaw.json config is preserved, MCP servers added."""
+    adapter = OpenClawGeneInstallAdapter()
+    fs = AsyncMock()
+
+    existing_config = {
+        "skills": {"load": {"extraDirs": ["/root/.openclaw/skills"]}},
+        "tools": {"allow": ["nodeskclaw_blackboard", "nodeskclaw_proposals"]},
+    }
+    fs.read_text = AsyncMock(return_value=json.dumps(existing_config))
+    fs.write_text = AsyncMock()
+
+    rec1 = MagicMock(
+        transport="stdio",
+        command="node",
+        url=None,
+        args=["/root/.deskclaw/tools/social-media-browser/server.js"],
+        env={"COOKIES_PATH": "/root/.deskclaw/cookies/"},
+        is_active=True,
+    )
+    rec1.name = "social-media-browser"
+
+    rec2 = MagicMock(
+        transport="stdio",
+        command="python",
+        url=None,
+        args=["/root/.deskclaw/tools/media-generator/server.py"],
+        env={"OPENAI_API_KEY": "sk-test"},
+        is_active=True,
+    )
+    rec2.name = "media-generator"
+
+    mcp_records = [rec1, rec2]
+
+    await adapter.sync_mcp_servers(fs, mcp_records)
+
+    config = json.loads(fs.write_text.call_args[0][1])
+
+    # Existing config fully preserved
+    assert config["skills"]["load"]["extraDirs"] == ["/root/.openclaw/skills"]
+    assert config["tools"]["allow"] == ["nodeskclaw_blackboard", "nodeskclaw_proposals"]
+
+    # MCP servers correctly added
+    assert len(config["mcpServers"]) == 2
+    assert config["mcpServers"]["social-media-browser"]["command"] == "node"
+    assert config["mcpServers"]["social-media-browser"]["transport"] == "stdio"
+    assert config["mcpServers"]["media-generator"]["command"] == "python"
+    assert config["mcpServers"]["media-generator"]["env"]["OPENAI_API_KEY"] == "sk-test"
+
+
+@pytest.mark.asyncio
+async def test_sync_then_uninstall_removes_entries():
+    """Simulates install then uninstall: MCP entries should be fully removed."""
+    adapter = OpenClawGeneInstallAdapter()
+    fs = AsyncMock()
+
+    # After install: config has one MCP server
+    fs.read_text = AsyncMock(return_value=json.dumps({
+        "skills": {},
+        "mcpServers": {
+            "social-media-browser": {"transport": "stdio", "command": "node"},
+        },
+    }))
+    fs.write_text = AsyncMock()
+
+    # Uninstall: pass empty list (all MCP records were soft-deleted)
+    await adapter.sync_mcp_servers(fs, [])
+
+    config = json.loads(fs.write_text.call_args[0][1])
+    assert config["mcpServers"] == {}
+    assert config["skills"] == {}
