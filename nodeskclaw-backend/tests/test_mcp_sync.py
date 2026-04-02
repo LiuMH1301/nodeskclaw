@@ -148,3 +148,58 @@ async def test_sync_mcp_servers_skips_on_corrupt_config():
 
     # Should not write anything
     fs.write_text.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_inject_mcp_servers_creates_db_records():
+    """_inject_mcp_servers should create InstanceMcpServer rows from manifest."""
+    from app.services.gene_service import _inject_mcp_servers
+
+    # Mock the DB session
+    db = AsyncMock()
+    # Make select().where().limit() return no existing record
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = None
+    db.execute = AsyncMock(return_value=mock_result)
+
+    mcp_servers = [
+        {
+            "name": "social-media-browser",
+            "transport": "stdio",
+            "command": "node",
+            "args": ["/root/.deskclaw/tools/social-media-browser/server.js"],
+            "env": {"COOKIES_PATH": "/root/.deskclaw/cookies/"},
+        },
+    ]
+
+    await _inject_mcp_servers(db, "inst-123", "gene-456", mcp_servers)
+
+    # Should have called db.add with an InstanceMcpServer
+    assert db.add.call_count == 1
+    added_obj = db.add.call_args[0][0]
+    assert added_obj.name == "social-media-browser"
+    assert added_obj.instance_id == "inst-123"
+    assert added_obj.source_gene_id == "gene-456"
+    assert added_obj.transport == "stdio"
+    assert added_obj.command == "node"
+    assert db.flush.called
+
+
+@pytest.mark.asyncio
+async def test_inject_mcp_servers_skips_existing():
+    """_inject_mcp_servers should not duplicate existing MCP server records."""
+    from app.services.gene_service import _inject_mcp_servers
+
+    db = AsyncMock()
+    # Simulate existing record found
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = MagicMock()  # existing record
+    db.execute = AsyncMock(return_value=mock_result)
+
+    mcp_servers = [{"name": "existing-server", "transport": "stdio", "command": "node"}]
+
+    await _inject_mcp_servers(db, "inst-123", "gene-456", mcp_servers)
+
+    # Should NOT call db.add since record already exists
+    assert db.add.call_count == 0
+    assert db.flush.called

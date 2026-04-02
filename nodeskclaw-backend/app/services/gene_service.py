@@ -1277,6 +1277,22 @@ async def _direct_install(
                         gene.short_description or gene.description or "",
                     )
                     await _apply_manifest_actions(fs, manifest, adapter)
+
+                    # Wire MCP servers: create DB rows then sync to openclaw.json
+                    mcp_defs = manifest.get("mcp_servers")
+                    if mcp_defs:
+                        from app.models.instance_mcp_server import InstanceMcpServer
+
+                        await _inject_mcp_servers(db, instance_id, gene_id, mcp_defs)
+                        mcp_q = await db.execute(
+                            select(InstanceMcpServer).where(
+                                InstanceMcpServer.instance_id == instance_id,
+                                InstanceMcpServer.is_active.is_(True),
+                                not_deleted(InstanceMcpServer),
+                            )
+                        )
+                        await adapter.sync_mcp_servers(fs, list(mcp_q.scalars().all()))
+
                     await adapter.invalidate_cache(fs, skill_name, "installed")
 
                 ig.status = InstanceGeneStatus.installed
