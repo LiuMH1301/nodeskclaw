@@ -47,13 +47,6 @@ for (const p of platforms) {
   }
 }
 
-// --- Inject shared utilities into each platform module ---
-// Platform handlers receive these via closure when handle() is called
-for (const p of platforms) {
-  p._urlValidator = urlValidator;
-  p._rateLimiter = rateLimiter;
-}
-
 // --- MCP server setup ---
 const server = new Server(
   { name: "social-media-browser", version: "1.0.0" },

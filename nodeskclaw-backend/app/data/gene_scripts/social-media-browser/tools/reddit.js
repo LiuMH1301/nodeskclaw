@@ -104,7 +104,10 @@ export default {
 
 // --- Tool implementations (private to this module) ---
 
+const MAX_SCAN_COUNT = 100;
+
 async function scanSubreddit(pool, page, { subreddit, sort = "hot", count = 20 }) {
+  count = Math.min(Math.max(1, count), MAX_SCAN_COUNT);
   if (!SUBREDDIT_PATTERN.test(subreddit)) {
     return {
       error: "invalid_subreddit",

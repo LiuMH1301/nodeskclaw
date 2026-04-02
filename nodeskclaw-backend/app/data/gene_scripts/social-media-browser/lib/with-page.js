@@ -38,6 +38,28 @@ export async function withAuthenticatedPage(pool, platform, loginPatterns, fn) {
 export async function navigateWithAuthCheck(page, url, pool, platform, loginPatterns) {
   await page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
 
+  // Verify final URL after redirects is still on an allowed domain
+  const finalUrl = page.url();
+  try {
+    const parsed = new URL(finalUrl);
+    const originalParsed = new URL(url);
+    if (parsed.hostname !== originalParsed.hostname &&
+        !parsed.hostname.endsWith(`.${originalParsed.hostname}`)) {
+      return {
+        error: "redirect_to_disallowed_domain",
+        platform,
+        message: `Navigation redirected to disallowed domain.`,
+      };
+    }
+  } catch {
+    // URL parsing failure on final URL -- treat as suspicious
+    return {
+      error: "redirect_to_disallowed_domain",
+      platform,
+      message: "Navigation resulted in an unparseable URL.",
+    };
+  }
+
   const authError = pool.checkAuthRedirect(page, platform, loginPatterns);
   if (authError) {
     await pool.invalidateContext(platform);

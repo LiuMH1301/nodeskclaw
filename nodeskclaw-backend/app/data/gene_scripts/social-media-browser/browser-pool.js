@@ -2,7 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { chromium } from "playwright";
 
-const CHROMIUM_ARGS = (process.env.PLAYWRIGHT_CHROMIUM_ARGS || "").split(" ").filter(Boolean);
+// Allowlist safe Chromium flags to prevent sandbox bypass via env injection
+const SAFE_CHROMIUM_ARGS = new Set([
+  "--disable-dev-shm-usage",
+  "--disable-gpu",
+  "--disable-software-rasterizer",
+  "--disable-extensions",
+]);
+const CHROMIUM_ARGS = (process.env.PLAYWRIGHT_CHROMIUM_ARGS || "")
+  .split(" ")
+  .filter((arg) => SAFE_CHROMIUM_ARGS.has(arg));
 
 /**
  * Manages one persistent browser context per platform.
@@ -22,8 +31,9 @@ export function createBrowserPool(cookiesPath) {
         args: [
           "--disable-dev-shm-usage",
           "--disable-gpu",
-          "--no-sandbox",
           "--js-flags=--max-old-space-size=512",
+          // Block navigation to cloud metadata / internal IPs at Chromium level
+          "--host-resolver-rules=MAP 169.254.169.254 ~NOTFOUND, MAP 0.0.0.0 ~NOTFOUND",
           ...CHROMIUM_ARGS,
         ],
       });
@@ -32,7 +42,14 @@ export function createBrowserPool(cookiesPath) {
   }
 
   function cookieFilePath(platform) {
-    return path.join(cookiesPath, `${platform}.json`);
+    if (!/^[a-z][a-z0-9_]{0,30}$/.test(platform)) {
+      throw new Error(`Invalid platform identifier`);
+    }
+    const filePath = path.resolve(cookiesPath, `${platform}.json`);
+    if (!filePath.startsWith(path.resolve(cookiesPath))) {
+      throw new Error("Invalid cookie path");
+    }
+    return filePath;
   }
 
   function loadCookies(platform) {
@@ -59,7 +76,7 @@ export function createBrowserPool(cookiesPath) {
       throw {
         error: "cookies_not_found",
         platform,
-        message: `No cookie file found at ${cookieFilePath(platform)}. Please export cookies and place the file.`,
+        message: `No cookie file found for platform "${platform}". Please export cookies and place the file.`,
       };
     }
 

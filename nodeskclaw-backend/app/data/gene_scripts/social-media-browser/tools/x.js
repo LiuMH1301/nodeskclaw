@@ -124,7 +124,10 @@ export default {
 
 // --- Tool implementations (private to this module) ---
 
+const MAX_SCAN_COUNT = 100;
+
 async function scanTimeline(pool, page, { query, count = 20 }, urlValidator) {
+  count = Math.min(Math.max(1, count), MAX_SCAN_COUNT);
   const url = query
     ? `https://x.com/search?q=${encodeURIComponent(query)}&f=live`
     : "https://x.com/home";
@@ -157,6 +160,7 @@ async function scanTimeline(pool, page, { query, count = 20 }, urlValidator) {
 }
 
 async function scanProfile(pool, page, { username, count = 10 }, urlValidator) {
+  count = Math.min(Math.max(1, count), MAX_SCAN_COUNT);
   if (!/^[a-zA-Z0-9_]{1,15}$/.test(username)) {
     return { error: "invalid_username", message: "Username must be 1-15 alphanumeric characters." };
   }

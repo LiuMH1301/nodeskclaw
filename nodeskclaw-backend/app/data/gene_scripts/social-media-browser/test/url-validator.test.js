@@ -5,6 +5,7 @@ import { createUrlValidator } from "../lib/url-validator.js";
 const platforms = [
   { platform: "x", domains: ["x.com", "twitter.com"] },
   { platform: "reddit", domains: ["reddit.com", "www.reddit.com"] },
+  { platform: "substack", domains: ["substack.com"] },
 ];
 
 const { validateUrl, requireValidUrl } = createUrlValidator(platforms);
@@ -45,8 +46,22 @@ describe("URL Validator", () => {
     assert.equal(result.error, "domain_not_allowed");
   });
 
-  it("requireValidUrl throws on invalid URL", () => {
-    assert.throws(() => requireValidUrl("http://x.com", "x"));
+  it("accepts subdomain URLs (e.g. newsletter.substack.com)", () => {
+    const result = validateUrl("https://newsletter.substack.com/archive", "substack");
+    assert.equal(result.valid, true);
+  });
+
+  it("rejects URLs with userinfo (credential bypass)", () => {
+    const result = validateUrl("https://user:pass@x.com/home", "x");
+    assert.equal(result.valid, false);
+    assert.equal(result.error, "invalid_url");
+  });
+
+  it("requireValidUrl throws Error instance on invalid URL", () => {
+    assert.throws(
+      () => requireValidUrl("http://x.com", "x"),
+      (err) => err instanceof Error && err.code === "invalid_protocol",
+    );
   });
 
   it("rejects unparseable URLs", () => {

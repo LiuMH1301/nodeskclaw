@@ -13,6 +13,7 @@
 
 export function createUrlValidator(platforms) {
   // Build domain -> platform lookup from platform configs
+  // Supports both exact domain match and subdomain suffix match (*.substack.com)
   const domainToPlatform = new Map();
   const platformDomains = new Map();
 
@@ -23,7 +24,16 @@ export function createUrlValidator(platforms) {
     }
   }
 
-  const allAllowed = new Set(domainToPlatform.keys());
+  const allDomains = [...domainToPlatform.keys()];
+
+  function matchesDomain(hostname, domains) {
+    for (const d of domains) {
+      if (hostname === d || hostname.endsWith(`.${d}`)) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   function validateUrl(url, platform = null) {
     let parsed;
@@ -37,13 +47,18 @@ export function createUrlValidator(platforms) {
       return { valid: false, error: "invalid_protocol", message: "Only HTTPS URLs are allowed." };
     }
 
+    // Reject userinfo in URL (e.g. https://x.com@evil.com/)
+    if (parsed.username || parsed.password) {
+      return { valid: false, error: "invalid_url", message: "URLs with credentials are not allowed." };
+    }
+
     const domains = platform ? platformDomains.get(platform) : null;
     if (platform && !domains) {
       return { valid: false, error: "unknown_platform", message: `Unknown platform: ${platform}` };
     }
 
-    const checkSet = domains ? new Set(domains) : allAllowed;
-    if (!checkSet.has(parsed.hostname)) {
+    const checkDomains = domains || allDomains;
+    if (!matchesDomain(parsed.hostname, checkDomains)) {
       return {
         valid: false,
         error: "domain_not_allowed",
@@ -57,7 +72,9 @@ export function createUrlValidator(platforms) {
   function requireValidUrl(url, platform = null) {
     const result = validateUrl(url, platform);
     if (!result.valid) {
-      throw result;
+      const err = new Error(result.message);
+      err.code = result.error;
+      throw err;
     }
     return result.url;
   }
