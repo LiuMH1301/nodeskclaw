@@ -41,6 +41,14 @@ class NoopGeneInstallAdapter(GeneInstallAdapter):
         if not scripts:
             return
         await fs.mkdir(SCRIPTS_DIR_REL)
+        # Collect unique parent directories and create them
+        parent_dirs: set[str] = set()
+        for filename in scripts:
+            parts = filename.split("/")
+            for i in range(1, len(parts)):
+                parent_dirs.add(f"{SCRIPTS_DIR_REL}/{'/'.join(parts[:i])}")
+        for d in sorted(parent_dirs):
+            await fs.mkdir(d)
         for filename, content in scripts.items():
             await fs.write_text(f"{SCRIPTS_DIR_REL}/{filename}", content)
 

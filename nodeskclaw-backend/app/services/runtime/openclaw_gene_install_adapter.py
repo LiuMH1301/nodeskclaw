@@ -73,6 +73,14 @@ class OpenClawGeneInstallAdapter(GeneInstallAdapter):
         if not scripts:
             return
         await fs.mkdir(self._scripts_dir)
+        # Collect unique parent directories and create them
+        parent_dirs: set[str] = set()
+        for filename in scripts:
+            parts = filename.split("/")
+            for i in range(1, len(parts)):
+                parent_dirs.add(f"{self._scripts_dir}/{'/'.join(parts[:i])}")
+        for d in sorted(parent_dirs):
+            await fs.mkdir(d)
         for filename, content in scripts.items():
             await fs.write_text(f"{self._scripts_dir}/{filename}", content)
 
