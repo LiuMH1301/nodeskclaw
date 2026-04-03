@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Coroutine
@@ -1208,12 +1209,26 @@ async def install_gene_prerestart(instance_id: str, gene_slug: str) -> None:
                 raise
 
 
+_ENV_PLACEHOLDER_RE = re.compile(r"^\$\{(\w+)\}$")
+
+
 async def _inject_mcp_servers(
-    db: AsyncSession, instance_id: str, gene_id: str, mcp_servers: list[dict],
+    db: AsyncSession,
+    instance_id: str,
+    gene_id: str,
+    mcp_servers: list[dict],
+    instance_env: dict[str, str] | None = None,
 ) -> None:
-    """Auto-inject MCP servers from gene manifest into instance_mcp_servers."""
+    """Auto-inject MCP servers from gene manifest into instance_mcp_servers.
+
+    Resolves ``${VAR}`` placeholders in each server's ``env`` dict using
+    *instance_env*.  Unresolved placeholders become empty strings with a
+    logged warning.  The original *mcp_servers* dicts are never mutated.
+    """
     import uuid
     from app.models.instance_mcp_server import InstanceMcpServer
+
+    env_vars = instance_env or {}
 
     for mcp_def in mcp_servers:
         name = mcp_def.get("name", "")
@@ -1228,6 +1243,24 @@ async def _inject_mcp_servers(
         )
         if existing.scalar_one_or_none():
             continue
+
+        # Resolve ${VAR} placeholders in env dict (immutable)
+        raw_env = mcp_def.get("env") or {}
+        resolved_env = {}
+        for key, val in raw_env.items():
+            match = _ENV_PLACEHOLDER_RE.match(str(val))
+            if match:
+                var_name = match.group(1)
+                resolved_val = env_vars.get(var_name, "")
+                if not resolved_val:
+                    logger.warning(
+                        "MCP env placeholder ${%s} unresolved for server %s",
+                        var_name, name,
+                    )
+                resolved_env[key] = resolved_val
+            else:
+                resolved_env[key] = val
+
         mcp = InstanceMcpServer(
             id=str(uuid.uuid4()),
             instance_id=instance_id,
@@ -1236,7 +1269,7 @@ async def _inject_mcp_servers(
             command=mcp_def.get("command"),
             url=mcp_def.get("url"),
             args=mcp_def.get("args"),
-            env=mcp_def.get("env"),
+            env=resolved_env,
             source="gene",
             source_gene_id=gene_id,
         )
@@ -1283,7 +1316,8 @@ async def _direct_install(
                     if mcp_defs:
                         from app.models.instance_mcp_server import InstanceMcpServer
 
-                        await _inject_mcp_servers(db, instance_id, gene_id, mcp_defs)
+                        inst_env = json.loads(instance.env_vars) if instance.env_vars else {}
+                        await _inject_mcp_servers(db, instance_id, gene_id, mcp_defs, inst_env)
                         mcp_q = await db.execute(
                             select(InstanceMcpServer).where(
                                 InstanceMcpServer.instance_id == instance_id,
