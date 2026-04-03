@@ -1,0 +1,35 @@
+{
+  "skill": {
+    "name": "media-generator",
+    "description": "Image and video generation via external APIs (DALL-E 3, Runway Gen-3)"
+  },
+  "tool_allow": [
+    "generate_image",
+    "edit_image",
+    "describe_image",
+    "generate_video"
+  ],
+  "mcp_servers": [
+    {
+      "name": "media-generator",
+      "transport": "stdio",
+      "command": "python3",
+      "args": ["/root/.deskclaw/tools/media-generator/server.py"],
+      "env": {
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+        "OPENAI_BASE_URL": "${OPENAI_BASE_URL}",
+        "RUNWAY_API_KEY": "${RUNWAY_API_KEY}",
+        "MEDIA_DIR": "/root/.deskclaw/media"
+      }
+    }
+  ],
+  "scripts": [
+    "media-generator/server.py",
+    "media-generator/lib/__init__.py",
+    "media-generator/lib/url_validator.py",
+    "media-generator/lib/cost_tracker.py",
+    "media-generator/providers/__init__.py",
+    "media-generator/providers/openai.py",
+    "media-generator/providers/runway.py"
+  ]
+}
