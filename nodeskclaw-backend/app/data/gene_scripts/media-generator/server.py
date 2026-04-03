@@ -50,6 +50,8 @@ ALL_TOOLS = []
 TOOL_HANDLERS: dict[str, tuple] = {}  # tool_name -> (handle_fn, provider_config)
 for p in providers:
     for tool in p["tools"]:
+        if tool.name in TOOL_HANDLERS:
+            raise ValueError(f"Duplicate tool name '{tool.name}' across providers")
         ALL_TOOLS.append(tool)
         TOOL_HANDLERS[tool.name] = (p["module"].handle, p)
 
@@ -66,7 +68,7 @@ class ProviderContext:
     def save_path(self, ext: str) -> Path:
         """Generate a unique save path for media files."""
         ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        rand = os.urandom(8).hex()[:8]
+        rand = os.urandom(4).hex()
         return self.media_dir / f"{ts}-{rand}.{ext}"
 
     def validate_base_url(self, base_url: str) -> str:
@@ -94,7 +96,8 @@ async def call_tool(name: str, arguments: dict):
 
     handle_fn, _provider_config = handler_entry
 
-    # Check cost budget
+    # Check cost budget (records call before API execution -- intentional fail-closed design:
+    # failed API calls still count against budget to prevent abuse via error loops)
     budget = cost_tracker.check_budget(name)
     if not budget["allowed"]:
         return [TextContent(type="text", text=json.dumps(budget))]

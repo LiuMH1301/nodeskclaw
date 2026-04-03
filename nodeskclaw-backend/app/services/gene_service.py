@@ -1316,7 +1316,11 @@ async def _direct_install(
                     if mcp_defs:
                         from app.models.instance_mcp_server import InstanceMcpServer
 
-                        inst_env = json.loads(instance.env_vars) if instance.env_vars else {}
+                        try:
+                            inst_env = json.loads(instance.env_vars) if instance.env_vars else {}
+                        except (json.JSONDecodeError, TypeError):
+                            logger.warning("Invalid env_vars JSON for instance %s, using empty env", instance_id)
+                            inst_env = {}
                         await _inject_mcp_servers(db, instance_id, gene_id, mcp_defs, inst_env)
                         mcp_q = await db.execute(
                             select(InstanceMcpServer).where(

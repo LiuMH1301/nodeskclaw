@@ -95,8 +95,9 @@ async def _generate_video(api_key: str, args: dict, ctx) -> dict:
     if ref_url:
         ctx.url_validator.require_valid_url(ref_url)
         # If local path, read and would need to upload -- for now, only support URL refs
-        if not ref_url.startswith("/"):
-            payload["promptImage"] = ref_url
+        if ref_url.startswith("/"):
+            return {"error": "unsupported", "message": "Local reference images are not yet supported for video generation. Provide an HTTPS URL instead."}
+        payload["promptImage"] = ref_url
 
     # Submit generation task
     async with _safe_client(timeout=30) as client:

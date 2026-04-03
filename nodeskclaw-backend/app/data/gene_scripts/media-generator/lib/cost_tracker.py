@@ -22,6 +22,8 @@ def create_cost_tracker(providers: list[dict], budget_multiplier: float = 1.0) -
     limits: dict[str, dict] = {}
     for p in providers:
         for tool_name, config in p.get("cost_limits", {}).items():
+            if tool_name in limits:
+                raise ValueError(f"Duplicate cost_limits for tool '{tool_name}' across providers")
             limits[tool_name] = {
                 "cost_per_call": config["cost_per_call"],
                 "max_per_hour": int(config["max_per_hour"] * budget_multiplier),
