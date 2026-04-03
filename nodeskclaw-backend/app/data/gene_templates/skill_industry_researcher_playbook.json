@@ -1,0 +1,13 @@
+{
+  "name": "industry-researcher-playbook",
+  "slug": "industry-researcher-playbook",
+  "description": "Behavioral playbook for the Industry Researcher agent -- deep analysis from scout findings",
+  "category": "效率",
+  "tags": ["playbook", "research", "analysis", "industry"],
+  "manifest": {
+    "skill": {
+      "name": "industry-researcher-playbook",
+      "description": "Behavioral playbook for the Industry Researcher agent -- deep analysis from scout findings"
+    }
+  }
+}

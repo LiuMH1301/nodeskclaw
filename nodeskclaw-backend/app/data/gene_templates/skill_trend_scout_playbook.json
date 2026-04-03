@@ -1,0 +1,13 @@
+{
+  "name": "trend-scout-playbook",
+  "slug": "trend-scout-playbook",
+  "description": "Behavioral playbook for the Trend Scout agent -- scanning and reporting social media trends",
+  "category": "效率",
+  "tags": ["playbook", "trend", "social-media", "research"],
+  "manifest": {
+    "skill": {
+      "name": "trend-scout-playbook",
+      "description": "Behavioral playbook for the Trend Scout agent -- scanning and reporting social media trends"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "copywriter-playbook",
+  "slug": "copywriter-playbook",
+  "description": "Behavioral playbook for the Copywriter agent -- content creation and publishing",
+  "category": "创意",
+  "tags": ["playbook", "copywriting", "content", "publishing"],
+  "manifest": {
+    "skill": {
+      "name": "copywriter-playbook",
+      "description": "Behavioral playbook for the Copywriter agent -- content creation and publishing"
+    }
+  }
+}

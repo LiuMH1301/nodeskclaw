@@ -1,0 +1,49 @@
+{
+  "name": "social-media-browser",
+  "slug": "social-media-browser",
+  "description": "Browser-based social media automation for X, Reddit, and Substack",
+  "category": "网络",
+  "tags": ["tools", "social-media", "browser", "automation"],
+  "manifest": {
+    "skill": {
+      "name": "social-media-browser",
+      "description": "Browser-based social media automation for X, Reddit, and Substack"
+    },
+    "tool_allow": [
+      "x_scan_timeline",
+      "x_scan_profile",
+      "x_post_tweet",
+      "x_reply",
+      "x_like",
+      "reddit_scan_subreddit",
+      "reddit_post",
+      "reddit_reply",
+      "substack_publish",
+      "substack_scan_feed"
+    ],
+    "mcp_servers": [
+      {
+        "name": "social-media-browser",
+        "transport": "stdio",
+        "command": "node",
+        "args": ["/root/.deskclaw/tools/social-media-browser/server.js"],
+        "env": {
+          "COOKIES_PATH": "/root/.deskclaw/cookies/"
+        }
+      }
+    ],
+    "scripts": [
+      "social-media-browser/package.json",
+      "social-media-browser/package-lock.json",
+      "social-media-browser/server.js",
+      "social-media-browser/browser-pool.js",
+      "social-media-browser/lib/url-validator.js",
+      "social-media-browser/lib/rate-limiter.js",
+      "social-media-browser/lib/with-page.js",
+      "social-media-browser/lib/selector-health.js",
+      "social-media-browser/tools/x.js",
+      "social-media-browser/tools/reddit.js",
+      "social-media-browser/tools/substack.js"
+    ]
+  }
+}
