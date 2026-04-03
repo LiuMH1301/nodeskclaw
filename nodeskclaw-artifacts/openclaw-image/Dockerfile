@@ -49,6 +49,13 @@ RUN npx playwright install --with-deps chromium \
 # Chromium resource limits for MCP server use
 ENV PLAYWRIGHT_CHROMIUM_ARGS="--disable-dev-shm-usage --disable-gpu --no-sandbox --js-flags=--max-old-space-size=512"
 
+# ---------- 预装 Python MCP 依赖（media-generator 基因依赖）----------
+# pip install into isolated path; gene server adds it to sys.path
+RUN pip install --no-cache-dir --break-system-packages --target /opt/gene-python-deps \
+    mcp==1.0.0 \
+    httpx==0.27.2
+ENV GENE_PYTHON_DEPS=/opt/gene-python-deps
+
 # ---------- 预置用户数据目录结构 ----------
 RUN mkdir -p /root/.openclaw/agents/main/sessions \
              /root/.openclaw/config \
