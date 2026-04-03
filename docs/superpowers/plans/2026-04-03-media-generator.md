@@ -50,6 +50,15 @@ async def handle(tool_name: str, args: dict, ctx: ProviderContext) -> dict:
 
 `server.py` auto-discovers all `providers/*.py` modules (excluding `__init__.py`) at startup. Shared utilities (URL validator, cost tracker) are initialized from aggregated provider data -- no hardcoded maps.
 
+**Security decisions (learned from Plan B security audit):**
+- **httpx redirect protection**: All `httpx.AsyncClient` instances created with `follow_redirects=False`. API keys in Authorization headers must never leak to redirect targets.
+- **Base URL validation**: `OPENAI_BASE_URL` and similar env vars are validated against `allowed_domains` before use -- prevents env-var-based API key theft.
+- **Subdomain suffix matching**: URL validator uses `.endswith(f".{domain}")` (same as Plan B), not exact match -- future CDN subdomains are covered.
+- **Userinfo rejection**: URLs with `user:pass@host` are rejected (port from Plan B fix).
+- **Input length limits**: All prompt/text fields have max length validation to prevent resource exhaustion.
+- **Image size cap**: `_read_image_bytes` enforces 20MB limit to prevent OOM.
+- **Error sanitization**: Only redacts sensitive strings > 8 chars to avoid aggressive false-positive replacement.
+
 ---
 
 ## File Structure
@@ -70,6 +79,7 @@ async def handle(tool_name: str, args: dict, ctx: ProviderContext) -> dict:
 | Create | `nodeskclaw-backend/app/data/gene_scripts/media-generator/tests/test_url_validator.py` | URL validator unit tests |
 | Create | `nodeskclaw-backend/app/data/gene_scripts/media-generator/tests/test_cost_tracker.py` | Cost tracker unit tests |
 | Create | `nodeskclaw-backend/app/data/gene_scripts/media-generator/tests/__init__.py` | Package marker |
+| Create | `nodeskclaw-backend/app/data/gene_scripts/media-generator/tests/conftest.py` | sys.path fix for imports |
 | Create | `nodeskclaw-backend/tests/test_media_generator.py` | Backend-side tests (manifest, env resolution) |
 
 ---
@@ -338,10 +348,10 @@ from urllib.parse import urlparse
 
 def create_url_validator(providers: list[dict], local_media_dir: str) -> "UrlValidator":
     """Build validator from aggregated provider configs."""
-    allowed_domains: set[str] = set()
+    allowed_domains: list[str] = []
     for p in providers:
         for domain in p.get("allowed_domains", []):
-            allowed_domains.add(domain)
+            allowed_domains.append(domain)
 
     resolved_media_dir = str(Path(local_media_dir).resolve())
 
@@ -351,9 +361,16 @@ def create_url_validator(providers: list[dict], local_media_dir: str) -> "UrlVal
 class UrlValidator:
     """Immutable URL validator. Created once at startup, never mutated."""
 
-    def __init__(self, allowed_domains: set[str], media_dir: str) -> None:
-        self._allowed_domains = frozenset(allowed_domains)
+    def __init__(self, allowed_domains: list[str], media_dir: str) -> None:
+        self._allowed_domains = tuple(allowed_domains)
         self._media_dir = media_dir
+
+    def _matches_domain(self, hostname: str) -> bool:
+        """Check hostname against allowlist with subdomain suffix matching."""
+        for d in self._allowed_domains:
+            if hostname == d or hostname.endswith(f".{d}"):
+                return True
+        return False
 
     def validate_url(self, url: str) -> dict:
         """Returns {"valid": True, "url": normalized} or {"valid": False, "error": ...}."""
@@ -370,7 +387,11 @@ class UrlValidator:
         if parsed.scheme != "https":
             return {"valid": False, "error": "invalid_protocol", "message": "Only HTTPS URLs are allowed."}
 
-        if parsed.hostname not in self._allowed_domains:
+        # Reject URLs with userinfo (e.g. https://user:pass@host/)
+        if parsed.username or parsed.password:
+            return {"valid": False, "error": "invalid_url", "message": "URLs with credentials are not allowed."}
+
+        if not self._matches_domain(parsed.hostname or ""):
             return {
                 "valid": False,
                 "error": "domain_not_allowed",
@@ -380,7 +401,7 @@ class UrlValidator:
         return {"valid": True, "url": url}
 
     def require_valid_url(self, url: str) -> str:
-        """Returns validated URL or raises dict with error details."""
+        """Returns validated URL or raises ValueError."""
         result = self.validate_url(url)
         if not result["valid"]:
             raise ValueError(result["message"])
@@ -397,7 +418,7 @@ class UrlValidator:
             return {
                 "valid": False,
                 "error": "path_traversal",
-                "message": f"Path must be within {self._media_dir}.",
+                "message": "Path must be within the media directory.",
             }
 
         return {"valid": True, "url": resolved}
@@ -518,6 +539,7 @@ import importlib
 import json
 import os
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -561,23 +583,27 @@ for p in providers:
         TOOL_HANDLERS[tool.name] = (p["module"].handle, p)
 
 # --- Provider context (passed to handlers) ---
+@dataclass(frozen=True)
 class ProviderContext:
     """Immutable context passed to provider handle functions."""
 
-    def __init__(self, url_validator, cost_tracker, media_dir):
-        self.url_validator = url_validator
-        self.cost_tracker = cost_tracker
-        self.media_dir = media_dir
+    url_validator: object
+    cost_tracker: object
+    media_dir: Path
 
     def save_path(self, ext: str) -> Path:
         """Generate a unique save path for media files."""
         ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        rand = os.urandom(8).hex()
-        h = hashlib.sha256(f"{ts}-{rand}".encode()).hexdigest()[:8]
-        return self.media_dir / f"{ts}-{h}.{ext}"
+        rand = os.urandom(8).hex()[:8]
+        return self.media_dir / f"{ts}-{rand}.{ext}"
+
+    def validate_base_url(self, base_url: str) -> str:
+        """Validate provider base URL against allowed domains (prevents env-var API key theft)."""
+        self.url_validator.require_valid_url(base_url)
+        return base_url
 
 
-ctx = ProviderContext(url_validator, cost_tracker, MEDIA_DIR)
+ctx = ProviderContext(url_validator=url_validator, cost_tracker=cost_tracker, media_dir=MEDIA_DIR)
 
 # --- MCP server setup ---
 server = Server("media-generator")
@@ -608,10 +634,10 @@ async def call_tool(name: str, arguments: dict):
         # URL validation errors
         return [TextContent(type="text", text=json.dumps({"error": "validation_error", "message": str(e)}))]
     except Exception as e:
-        # Sanitize: don't leak paths or API keys
+        # Sanitize: don't leak paths or API keys (only redact strings > 8 chars to avoid false positives)
         safe_msg = str(e)
         for sensitive in [str(Path.home()), str(MEDIA_DIR), os.environ.get("OPENAI_API_KEY", ""), os.environ.get("RUNWAY_API_KEY", "")]:
-            if sensitive:
+            if sensitive and len(sensitive) > 8:
                 safe_msg = safe_msg.replace(sensitive, "[redacted]")
         safe_msg = safe_msg[:200]
         return [TextContent(type="text", text=json.dumps({"error": "internal_error", "message": safe_msg}))]
@@ -735,21 +761,41 @@ def _api_key() -> str:
     return os.environ.get("OPENAI_API_KEY", "")
 
 
-def _base_url() -> str:
-    return os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+MAX_PROMPT_LENGTH = 4000
+MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20MB
+
+
+def _base_url(ctx) -> str:
+    """Read and validate base URL at call time. Prevents env-var-based API key theft."""
+    url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    ctx.validate_base_url(url)
+    return url
+
+
+def _safe_client(timeout: int = 60) -> httpx.AsyncClient:
+    """Create httpx client with security defaults: no redirect following."""
+    return httpx.AsyncClient(timeout=timeout, follow_redirects=False)
 
 
 async def _read_image_bytes(url: str, ctx) -> bytes:
-    """Read image bytes from validated URL or local path."""
+    """Read image bytes from validated URL or local path. Max 20MB."""
     ctx.url_validator.require_valid_url(url)
 
     if url.startswith("/"):
         from pathlib import Path
-        return Path(url).read_bytes()
+        data = Path(url).read_bytes()
+        if len(data) > MAX_IMAGE_SIZE:
+            raise ValueError(f"Image exceeds {MAX_IMAGE_SIZE // (1024*1024)}MB limit.")
+        return data
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with _safe_client(timeout=60) as client:
         resp = await client.get(url)
         resp.raise_for_status()
+        if len(resp.content) > MAX_IMAGE_SIZE:
+            raise ValueError(f"Image exceeds {MAX_IMAGE_SIZE // (1024*1024)}MB limit.")
+        content_type = resp.headers.get("content-type", "")
+        if content_type and not content_type.startswith("image/"):
+            raise ValueError(f"Expected image content, got {content_type}.")
         return resp.content
 
 
@@ -771,12 +817,16 @@ async def handle(tool_name: str, args: dict, ctx) -> dict:
 
 async def _generate_image(api_key: str, args: dict, ctx) -> dict:
     prompt = args["prompt"]
+    if not prompt or len(prompt) > MAX_PROMPT_LENGTH:
+        return {"error": "invalid_input", "message": f"Prompt must be 1-{MAX_PROMPT_LENGTH} characters."}
+
     size = args.get("size", "1024x1024")
     style = args.get("style", "vivid")
+    base = _base_url(ctx)
 
-    async with httpx.AsyncClient(timeout=120) as client:
+    async with _safe_client(timeout=120) as client:
         resp = await client.post(
-            f"{_base_url()}/images/generations",
+            f"{base}/images/generations",
             headers={"Authorization": f"Bearer {api_key}"},
             json={
                 "model": "dall-e-3",
@@ -806,12 +856,15 @@ async def _generate_image(api_key: str, args: dict, ctx) -> dict:
 async def _edit_image(api_key: str, args: dict, ctx) -> dict:
     image_url = args["image_url"]
     prompt = args["prompt"]
+    if not prompt or len(prompt) > MAX_PROMPT_LENGTH:
+        return {"error": "invalid_input", "message": f"Prompt must be 1-{MAX_PROMPT_LENGTH} characters."}
 
     img_bytes = await _read_image_bytes(image_url, ctx)
+    base = _base_url(ctx)
 
-    async with httpx.AsyncClient(timeout=120) as client:
+    async with _safe_client(timeout=120) as client:
         resp = await client.post(
-            f"{_base_url()}/images/edits",
+            f"{base}/images/edits",
             headers={"Authorization": f"Bearer {api_key}"},
             files={"image": ("image.png", img_bytes, "image/png")},
             data={"prompt": prompt, "n": 1, "size": "1024x1024"},
@@ -831,14 +884,19 @@ async def _describe_image(api_key: str, args: dict, ctx) -> dict:
     ]
     if image_url.startswith("/"):
         from pathlib import Path
-        encoded = base64.b64encode(Path(image_url).read_bytes()).decode()
+        img_bytes = Path(image_url).read_bytes()
+        if len(img_bytes) > MAX_IMAGE_SIZE:
+            return {"error": "invalid_input", "message": f"Image exceeds {MAX_IMAGE_SIZE // (1024*1024)}MB limit."}
+        encoded = base64.b64encode(img_bytes).decode()
         content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}})
     else:
         content.append({"type": "image_url", "image_url": {"url": image_url}})
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    base = _base_url(ctx)
+
+    async with _safe_client(timeout=60) as client:
         resp = await client.post(
-            f"{_base_url()}/chat/completions",
+            f"{base}/chat/completions",
             headers={"Authorization": f"Bearer {api_key}"},
             json={
                 "model": "gpt-4o",
@@ -905,12 +963,166 @@ PROVIDER = {
 }
 ```
 
-Implementation:
-- `_api_key()` reads `RUNWAY_API_KEY` from env at call time
-- Submits generation task via Runway API, then polls for completion (max 60 iterations, 5s interval, 300s total timeout)
-- Downloads result video and saves to `ctx.save_path("mp4")`
-- If `reference_image_url` provided, validates via `ctx.url_validator.require_valid_url()`
-- Error sanitization: strips API keys and file paths from error messages
+Full implementation:
+
+```python
+"""
+Runway Gen-3 provider module: video generation from text/image prompts.
+
+Same provider module contract as openai.py. See that file for the pattern.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+
+import httpx
+from mcp.types import Tool
+
+MAX_PROMPT_LENGTH = 2000
+MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20MB
+
+PROVIDER = {
+    "name": "runway",
+    "allowed_domains": [
+        "api.dev.runwayml.com",
+    ],
+    "env_keys": ["RUNWAY_API_KEY"],
+    "tools": [
+        Tool(
+            name="generate_video",
+            description="Generate a short video from a text prompt using Runway Gen-3. Cost: ~$0.50 per 5s video. IMPORTANT: Confirm cost with user before generating.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "Video generation prompt."},
+                    "duration": {
+                        "type": "string",
+                        "enum": ["5s", "10s"],
+                        "default": "5s",
+                    },
+                    "reference_image_url": {
+                        "type": "string",
+                        "description": "Optional reference image URL or local path.",
+                    },
+                },
+                "required": ["prompt"],
+            },
+        ),
+    ],
+    "cost_limits": {
+        "generate_video": {"cost_per_call": 0.50, "max_per_hour": 5},
+    },
+}
+
+API_BASE = "https://api.dev.runwayml.com/v1"
+POLL_INTERVAL = 5  # seconds
+MAX_POLL_ITERATIONS = 60  # 5 minutes total
+
+
+def _api_key() -> str:
+    return os.environ.get("RUNWAY_API_KEY", "")
+
+
+def _safe_client(timeout: int = 60) -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=timeout, follow_redirects=False)
+
+
+async def handle(tool_name: str, args: dict, ctx) -> dict:
+    """Dispatch Runway tool calls."""
+    api_key = _api_key()
+    if not api_key:
+        return {"error": "RUNWAY_API_KEY not configured"}
+
+    if tool_name == "generate_video":
+        return await _generate_video(api_key, args, ctx)
+    else:
+        return {"error": "unknown_tool", "tool": tool_name}
+
+
+async def _generate_video(api_key: str, args: dict, ctx) -> dict:
+    prompt = args["prompt"]
+    if not prompt or len(prompt) > MAX_PROMPT_LENGTH:
+        return {"error": "invalid_input", "message": f"Prompt must be 1-{MAX_PROMPT_LENGTH} characters."}
+
+    duration = args.get("duration", "5s")
+    duration_seconds = 10 if duration == "10s" else 5
+
+    # Build request payload
+    payload = {
+        "promptText": prompt,
+        "model": "gen3a_turbo",
+        "duration": duration_seconds,
+    }
+
+    # Optional reference image
+    ref_url = args.get("reference_image_url")
+    if ref_url:
+        ctx.url_validator.require_valid_url(ref_url)
+        # If local path, read and would need to upload -- for now, only support URL refs
+        if not ref_url.startswith("/"):
+            payload["promptImage"] = ref_url
+
+    # Submit generation task
+    async with _safe_client(timeout=30) as client:
+        resp = await client.post(
+            f"{API_BASE}/image_to_video",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "X-Runway-Version": "2024-11-06",
+            },
+            json=payload,
+        )
+        resp.raise_for_status()
+        task = resp.json()
+
+    task_id = task.get("id")
+    if not task_id:
+        return {"error": "api_error", "message": "No task ID returned from Runway API."}
+
+    # Poll for completion
+    for _ in range(MAX_POLL_ITERATIONS):
+        await asyncio.sleep(POLL_INTERVAL)
+
+        async with _safe_client(timeout=30) as client:
+            resp = await client.get(
+                f"{API_BASE}/tasks/{task_id}",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "X-Runway-Version": "2024-11-06",
+                },
+            )
+            resp.raise_for_status()
+            status = resp.json()
+
+        state = status.get("status", "")
+        if state == "SUCCEEDED":
+            output_url = (status.get("output", []) or [""])[0]
+            if not output_url:
+                return {"error": "api_error", "message": "Video generated but no output URL returned."}
+
+            # Download and save video
+            async with _safe_client(timeout=120) as client:
+                video_resp = await client.get(output_url)
+                video_resp.raise_for_status()
+
+            save_path = ctx.save_path("mp4")
+            save_path.write_bytes(video_resp.content)
+
+            return {
+                "local_path": str(save_path),
+                "duration": duration,
+                "task_id": task_id,
+                "prompt": prompt,
+            }
+
+        if state == "FAILED":
+            failure = status.get("failure", "Unknown failure")
+            return {"error": "generation_failed", "message": str(failure)[:200], "task_id": task_id}
+
+    return {"error": "timeout", "message": f"Video generation timed out after {MAX_POLL_ITERATIONS * POLL_INTERVAL}s.", "task_id": task_id}
+```
 
 - [ ] **Step 2: Commit**
 
@@ -1058,7 +1270,21 @@ git commit -m "feat(gene): media-generator 基因清单和 SKILL.md（含成本�
 - Create: `nodeskclaw-backend/app/data/gene_scripts/media-generator/tests/test_cost_tracker.py`
 - Modify: `nodeskclaw-backend/tests/test_media_generator.py`
 
-- [ ] **Step 1: Create URL validator unit tests**
+- [ ] **Step 1: Create conftest.py for import path setup**
+
+Create `gene_scripts/media-generator/tests/conftest.py`:
+
+```python
+"""Fix sys.path so tests can import from lib/ and providers/ without package install."""
+
+import sys
+from pathlib import Path
+
+# Add gene_scripts/media-generator to sys.path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+```
+
+- [ ] **Step 3: Create URL validator unit tests**
 
 Create `gene_scripts/media-generator/tests/test_url_validator.py`:
 
@@ -1128,12 +1354,30 @@ def test_rejects_url_encoded_traversal(validator, tmp_path):
     assert result["valid"] is False
 
 
+def test_rejects_urls_with_userinfo(validator):
+    result = validator.validate_url("https://user:pass@api.openai.com/v1")
+    assert result["valid"] is False
+    assert result["error"] == "invalid_url"
+
+
+def test_accepts_subdomain_of_allowed_domain(validator):
+    result = validator.validate_url("https://cdn.api.openai.com/files/123")
+    assert result["valid"] is True
+
+
+def test_path_traversal_error_does_not_leak_media_dir(validator, tmp_path):
+    traversal = str(tmp_path / "media" / ".." / ".." / "etc" / "passwd")
+    result = validator.validate_url(traversal)
+    assert "media directory" in result["message"]
+    assert str(tmp_path) not in result["message"]
+
+
 def test_require_valid_url_raises_on_invalid(validator):
     with pytest.raises(ValueError):
         validator.require_valid_url("http://evil.com/bad")
 ```
 
-- [ ] **Step 2: Create cost tracker unit tests**
+- [ ] **Step 4: Create cost tracker unit tests**
 
 Create `gene_scripts/media-generator/tests/test_cost_tracker.py`:
 
@@ -1213,7 +1457,7 @@ def test_reports_estimated_spend():
     assert result["estimated_spend_usd"] > 0
 ```
 
-- [ ] **Step 3: Add backend-side manifest and subprocess tests**
+- [ ] **Step 5: Add backend-side manifest and subprocess tests**
 
 Append to `nodeskclaw-backend/tests/test_media_generator.py`:
 
@@ -1271,7 +1515,7 @@ def test_gene_scripts_unit_tests():
     assert result.returncode == 0, f"Gene scripts tests failed:\n{result.stdout}\n{result.stderr}"
 ```
 
-- [ ] **Step 4: Run all tests**
+- [ ] **Step 6: Run all tests**
 
 ```bash
 # Run gene_scripts tests directly
@@ -1281,7 +1525,7 @@ cd nodeskclaw-backend/app/data/gene_scripts/media-generator && python3 -m pytest
 cd nodeskclaw-backend && uv run pytest tests/test_media_generator.py -v
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add nodeskclaw-backend/app/data/gene_scripts/media-generator/tests/ \
@@ -1315,6 +1559,7 @@ providers/openai.py
 providers/runway.py
 server.py
 tests/__init__.py
+tests/conftest.py
 tests/test_cost_tracker.py
 tests/test_url_validator.py
 ```
@@ -1379,21 +1624,31 @@ Add unit tests in `tests/test_<name>_provider.py` for provider-specific logic.
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| API key leakage via error messages | HIGH | Multi-pattern sanitization in server.py; keys read per-call, not stored in module state |
-| SSRF via `image_url` / `reference_image_url` | HIGH | URL allowlist factory from provider configs; `Path.resolve()` for path traversal |
+| API key leakage via httpx redirects | **CRITICAL** | `follow_redirects=False` on all httpx clients; auth headers never sent to redirect targets |
+| API key theft via env var `OPENAI_BASE_URL` | **CRITICAL** | `validate_base_url()` checks base URL against `allowed_domains` before making requests |
+| API key leakage via error messages | HIGH | Multi-pattern sanitization in server.py (only redacts strings > 8 chars); keys read per-call, not stored in module state |
+| SSRF via `image_url` / `reference_image_url` | HIGH | URL allowlist factory with subdomain suffix matching; userinfo rejection; `Path.resolve()` for path traversal |
+| OOM via oversized image downloads | HIGH | 20MB size cap in `_read_image_bytes`; Content-Type validation |
+| Resource exhaustion via long prompts | HIGH | `MAX_PROMPT_LENGTH` enforced (4000 DALL-E, 2000 Runway) |
 | Cost overrun from generation loops | HIGH | Server-side cost tracker with per-tool hourly budgets; `budget_exceeded` error blocks further calls |
 | Python dep conflicts with OpenClaw runtime | MEDIUM | Deps baked into `/opt/gene-python-deps` (isolated from system Python) |
-| Runway API timeout (5-minute video gen) | LOW | 300s httpx timeout; 60-iteration poll loop with 5s intervals |
+| Runway API timeout (5-minute video gen) | LOW | 300s total poll timeout (60 iterations * 5s); async sleep does not block event loop |
 | `${VAR}` placeholder not resolved | MEDIUM | `_inject_mcp_servers` logs warning; MCP server gets empty string and returns clear error |
 
 ## Acceptance Criteria
 
 - [ ] `_inject_mcp_servers` resolves `${VAR}` placeholders from instance env_vars
 - [ ] Unresolved placeholders become empty strings with a logged warning
-- [ ] URL validation blocks non-allowlisted domains and path traversal (including `Path.resolve()`)
+- [ ] URL validation blocks non-allowlisted domains, userinfo URLs, and path traversal
+- [ ] URL validator supports subdomain suffix matching (e.g. `cdn.api.openai.com` matches `api.openai.com`)
+- [ ] All httpx clients use `follow_redirects=False`
+- [ ] `OPENAI_BASE_URL` env var is validated against `allowed_domains` before use
+- [ ] Image downloads capped at 20MB with Content-Type validation
+- [ ] Prompt/text inputs have max length validation
 - [ ] Cost tracker blocks API calls exceeding hourly budget
 - [ ] API keys are read from `os.environ` at call time, not import time
-- [ ] Error messages do not leak file paths or API keys
+- [ ] Error messages do not leak file paths or API keys (only redacts strings > 8 chars)
+- [ ] `ProviderContext` is a frozen dataclass (immutable)
 - [ ] Adding a new provider requires only: 1 `providers/*.py` file + manifest update
 - [ ] Gene scripts unit tests pass independently (`python3 -m pytest tests/`)
 - [ ] Backend manifest and integration tests pass
