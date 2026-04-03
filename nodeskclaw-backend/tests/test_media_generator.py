@@ -2,6 +2,7 @@
 
 import json
 import re
+import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -153,3 +154,55 @@ async def test_inject_mcp_servers_does_not_mutate_input():
     # Original dict must be untouched
     assert original_env["OPENAI_API_KEY"] == "${OPENAI_API_KEY}"
     assert original_env["STATIC"] == "hello"
+
+
+# --- Manifest and SKILL.md Validation Tests ---
+
+MANIFESTS_DIR = Path(__file__).parent.parent / "app/data/gene_manifests"
+SKILLS_DIR = Path(__file__).parent.parent / "app/data/gene_skills"
+SCRIPTS_DIR = Path(__file__).parent.parent / "app/data/gene_scripts"
+
+
+def test_manifest_exists_and_valid():
+    manifest_path = MANIFESTS_DIR / "media-generator.json"
+    assert manifest_path.exists()
+    manifest = json.loads(manifest_path.read_text())
+
+    assert manifest["skill"]["name"] == "media-generator"
+    assert len(manifest["tool_allow"]) == 4
+    assert len(manifest["mcp_servers"]) == 1
+    assert manifest["mcp_servers"][0]["transport"] == "stdio"
+    # Verify ${VAR} placeholders are present (resolved at install time)
+    env = manifest["mcp_servers"][0]["env"]
+    assert env["OPENAI_API_KEY"] == "${OPENAI_API_KEY}"
+
+
+def test_all_scripts_exist():
+    manifest_path = MANIFESTS_DIR / "media-generator.json"
+    manifest = json.loads(manifest_path.read_text())
+    for script in manifest["scripts"]:
+        assert (SCRIPTS_DIR / script).exists(), f"Script not found: {script}"
+
+
+def test_skill_md_exists_and_has_required_sections():
+    skill_path = SKILLS_DIR / "media-generator.md"
+    assert skill_path.exists()
+    content = skill_path.read_text()
+    assert content.startswith("---")
+    assert "name: media-generator" in content
+    assert "## Workflow" in content
+    assert "## What NOT to Do" in content
+    assert "budget" in content.lower()
+
+
+def test_gene_scripts_unit_tests():
+    """Run standalone unit tests inside gene_scripts/media-generator/."""
+    scripts_dir = SCRIPTS_DIR / "media-generator"
+    result = subprocess.run(
+        ["python3", "-m", "pytest", "tests/", "-v", "--tb=short"],
+        cwd=scripts_dir,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, f"Gene scripts tests failed:\n{result.stdout}\n{result.stderr}"
