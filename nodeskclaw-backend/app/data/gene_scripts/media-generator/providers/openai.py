@@ -190,12 +190,16 @@ async def _edit_image(api_key: str, args: dict, ctx) -> dict:
             f"{base}/images/edits",
             headers={"Authorization": f"Bearer {api_key}"},
             files={"image": ("image.png", img_bytes, "image/png")},
-            data={"prompt": prompt, "n": 1, "size": "1024x1024"},
+            data={"prompt": prompt, "n": "1", "size": "1024x1024", "response_format": "b64_json"},
         )
         resp.raise_for_status()
         data = resp.json()
 
-    return {"url": data["data"][0].get("url", ""), "prompt": prompt}
+    image_bytes = base64.b64decode(data["data"][0]["b64_json"])
+    save_path = ctx.save_path("png")
+    save_path.write_bytes(image_bytes)
+
+    return {"local_path": str(save_path), "prompt": prompt}
 
 
 async def _describe_image(api_key: str, args: dict, ctx) -> dict:

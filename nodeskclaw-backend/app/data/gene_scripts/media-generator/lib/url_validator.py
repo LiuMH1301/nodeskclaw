@@ -11,6 +11,7 @@ allowed_domains, and server.py passes all providers to this factory.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -83,7 +84,8 @@ class UrlValidator:
         except Exception:
             return {"valid": False, "error": "invalid_path", "message": "Cannot resolve path."}
 
-        if not resolved.startswith(self._media_dir):
+        media_prefix = self._media_dir if self._media_dir.endswith(os.sep) else self._media_dir + os.sep
+        if not (resolved == self._media_dir or resolved.startswith(media_prefix)):
             return {
                 "valid": False,
                 "error": "path_traversal",

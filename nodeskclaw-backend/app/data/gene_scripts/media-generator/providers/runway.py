@@ -14,11 +14,13 @@ from mcp.types import Tool
 
 MAX_PROMPT_LENGTH = 2000
 MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20MB
+MAX_VIDEO_SIZE = 100 * 1024 * 1024  # 100MB
 
 PROVIDER = {
     "name": "runway",
     "allowed_domains": [
         "api.dev.runwayml.com",
+        "runwayml.com",
     ],
     "env_keys": ["RUNWAY_API_KEY"],
     "tools": [
@@ -134,10 +136,15 @@ async def _generate_video(api_key: str, args: dict, ctx) -> dict:
             if not output_url:
                 return {"error": "api_error", "message": "Video generated but no output URL returned."}
 
+            # Validate output URL before downloading (SSRF protection)
+            ctx.url_validator.require_valid_url(output_url)
+
             # Download and save video
             async with _safe_client(timeout=120) as client:
                 video_resp = await client.get(output_url)
                 video_resp.raise_for_status()
+                if len(video_resp.content) > MAX_VIDEO_SIZE:
+                    raise ValueError(f"Video exceeds {MAX_VIDEO_SIZE // (1024*1024)}MB limit.")
 
             save_path = ctx.save_path("mp4")
             save_path.write_bytes(video_resp.content)
