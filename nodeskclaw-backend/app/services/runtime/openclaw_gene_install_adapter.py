@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_TOOL_DENY_LIST = frozenset({"shell", "computer", "bash", "exec", "filesystem_write_file"})
+
 
 class OpenClawGeneInstallAdapter(GeneInstallAdapter):
 
@@ -63,6 +65,9 @@ class OpenClawGeneInstallAdapter(GeneInstallAdapter):
             allow = []
         existing_set = set(allow)
         for name in tool_names:
+            if name in _TOOL_DENY_LIST:
+                logger.warning("allow_tools: tool '%s' is in deny list, skipping", name)
+                continue
             if name not in existing_set:
                 allow.append(name)
                 existing_set.add(name)
@@ -72,6 +77,9 @@ class OpenClawGeneInstallAdapter(GeneInstallAdapter):
     async def deploy_scripts(self, fs: RemoteFS, scripts: dict[str, str]) -> None:
         if not scripts:
             return
+        for filename in scripts:
+            if ".." in filename or filename.startswith("/"):
+                raise ValueError(f"Path traversal detected in script filename: {filename}")
         await fs.mkdir(self._scripts_dir)
         # Collect unique parent directories and create them
         parent_dirs: set[str] = set()

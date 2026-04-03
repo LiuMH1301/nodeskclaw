@@ -18,7 +18,7 @@ const CHROMIUM_ARGS = (process.env.PLAYWRIGHT_CHROMIUM_ARGS || "")
  * Cookies are loaded from JSON files at context creation time.
  * Platform-agnostic -- works with any platform identifier.
  */
-export function createBrowserPool(cookiesPath) {
+export function createBrowserPool(cookiesPath, platformDomains = new Map()) {
   let browser = null;
   // Note: browser pool requires mutable state for connection management.
   // This is an intentional exception to the immutability rule.
@@ -26,6 +26,7 @@ export function createBrowserPool(cookiesPath) {
 
   async function ensureBrowser() {
     if (!browser || !browser.isConnected()) {
+      contexts.clear();
       browser = await chromium.launch({
         headless: true,
         args: [
@@ -33,7 +34,7 @@ export function createBrowserPool(cookiesPath) {
           "--disable-gpu",
           "--js-flags=--max-old-space-size=512",
           // Block navigation to cloud metadata / internal IPs at Chromium level
-          "--host-resolver-rules=MAP 169.254.169.254 ~NOTFOUND, MAP 0.0.0.0 ~NOTFOUND",
+          "--host-resolver-rules=MAP 169.254.169.254 ~NOTFOUND, MAP 0.0.0.0 ~NOTFOUND, MAP 127.0.0.1 ~NOTFOUND, MAP metadata.google.internal ~NOTFOUND",
           ...CHROMIUM_ARGS,
         ],
       });
@@ -52,6 +53,25 @@ export function createBrowserPool(cookiesPath) {
     return filePath;
   }
 
+  function validateCookieSchema(cookies, platform) {
+    if (!Array.isArray(cookies)) {
+      throw new Error("Cookie file must contain a JSON array.");
+    }
+    const allowedDomains = platformDomains.get(platform) || [];
+    for (const cookie of cookies) {
+      if (typeof cookie.name !== "string" || typeof cookie.value !== "string" || typeof cookie.domain !== "string") {
+        throw new Error("Each cookie must have name (string), value (string), and domain (string).");
+      }
+      const cookieDomain = cookie.domain.startsWith(".") ? cookie.domain.slice(1) : cookie.domain;
+      const domainAllowed = allowedDomains.some(
+        (d) => cookieDomain === d || cookieDomain.endsWith(`.${d}`),
+      );
+      if (!domainAllowed) {
+        throw new Error(`Cookie domain "${cookie.domain}" is not allowed for platform "${platform}".`);
+      }
+    }
+  }
+
   function loadCookies(platform) {
     const filePath = cookieFilePath(platform);
     if (!fs.existsSync(filePath)) {
@@ -59,8 +79,13 @@ export function createBrowserPool(cookiesPath) {
     }
     const raw = fs.readFileSync(filePath, "utf-8");
     try {
-      return JSON.parse(raw);
-    } catch {
+      const parsed = JSON.parse(raw);
+      validateCookieSchema(parsed, platform);
+      return parsed;
+    } catch (err) {
+      if (err.message.startsWith("Cookie") || err.message.startsWith("Each")) {
+        throw err;
+      }
       return null;
     }
   }

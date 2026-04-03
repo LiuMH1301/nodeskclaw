@@ -70,7 +70,7 @@ export default {
         case "substack_scan_feed":
           return await scanFeed(pool, page, args, urlValidator);
         case "substack_publish":
-          return await publishDraft(pool, page, args);
+          return await publishDraft(pool, page, args, urlValidator);
         default:
           return { error: "unknown_tool", tool: toolName };
       }
@@ -83,7 +83,7 @@ export default {
 async function scanFeed(pool, page, { publication_url, count = 10 }, urlValidator) {
   urlValidator.requireValidUrl(publication_url, "substack");
 
-  const authErr = await navigateWithAuthCheck(page, publication_url, pool, PLATFORM, LOGIN_PATTERNS);
+  const authErr = await navigateWithAuthCheck(page, publication_url, pool, PLATFORM, LOGIN_PATTERNS, { urlValidator });
   if (authErr) return authErr;
 
   const health = await checkSelectorHealth(page, SELECTORS);
@@ -111,7 +111,7 @@ async function scanFeed(pool, page, { publication_url, count = 10 }, urlValidato
   return { publication_url, posts, count: posts.length };
 }
 
-async function publishDraft(pool, page, { title, subtitle, body }) {
+async function publishDraft(pool, page, { title, subtitle, body }, urlValidator) {
   if (!title) {
     return { error: "invalid_input", message: "Post title is required." };
   }
@@ -122,7 +122,7 @@ async function publishDraft(pool, page, { title, subtitle, body }) {
 
   // Navigate to the new post page via the Substack dashboard
   const dashboardUrl = "https://substack.com/publish/post";
-  const authErr = await navigateWithAuthCheck(page, dashboardUrl, pool, PLATFORM, LOGIN_PATTERNS);
+  const authErr = await navigateWithAuthCheck(page, dashboardUrl, pool, PLATFORM, LOGIN_PATTERNS, { urlValidator });
   if (authErr) return authErr;
 
   // Fill in the title

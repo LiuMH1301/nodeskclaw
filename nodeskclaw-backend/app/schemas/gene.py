@@ -67,7 +67,7 @@ class GeneListItem(BaseModel):
 
 class GeneCreateRequest(BaseModel):
     name: str = Field(..., max_length=128)
-    slug: str = Field(..., max_length=128)
+    slug: str = Field(..., max_length=128, pattern=r"^[a-z0-9][a-z0-9_-]{0,127}$")
     description: str | None = None
     short_description: str | None = Field(
         None, max_length=256,
@@ -125,7 +125,7 @@ class GenomeListItem(BaseModel):
 
 class GenomeCreateRequest(BaseModel):
     name: str = Field(..., max_length=128)
-    slug: str = Field(..., max_length=128)
+    slug: str = Field(..., max_length=128, pattern=r"^[a-z0-9][a-z0-9_-]{0,127}$")
     description: str | None = None
     short_description: str | None = Field(None, max_length=256)
     icon: str | None = Field(None, max_length=32)
@@ -250,7 +250,7 @@ class CreateGeneRequest(BaseModel):
 
 class ManualGeneCreate(BaseModel):
     name: str = Field(..., max_length=128)
-    slug: str = Field(..., max_length=128)
+    slug: str = Field(..., max_length=128, pattern=r"^[a-z0-9][a-z0-9_-]{0,127}$")
     description: str | None = None
     short_description: str | None = Field(None, max_length=256)
     skill_content: str

@@ -14,6 +14,7 @@ cost_limits, and server.py passes all providers to this factory.
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 
@@ -36,43 +37,45 @@ class CostTracker:
 
     def __init__(self, limits: dict[str, dict]) -> None:
         self._limits = limits
+        self._lock = asyncio.Lock()
         # Mutable: call counts per tool, reset hourly
         self._counts: dict[str, list] = {}  # tool -> [timestamp, ...]
 
-    def check_budget(self, tool_name: str) -> dict:
+    async def check_budget(self, tool_name: str) -> dict:
         """Check if a tool call is within budget. Returns {"allowed": True/False, ...}."""
         limit = self._limits.get(tool_name)
         if not limit:
             return {"allowed": True}
 
-        now = time.time()
-        one_hour_ago = now - 3600
+        async with self._lock:
+            now = time.time()
+            one_hour_ago = now - 3600
 
-        # Get recent calls (immutable filter)
-        recent = [t for t in self._counts.get(tool_name, []) if t > one_hour_ago]
-        self._counts[tool_name] = recent
+            # Get recent calls (immutable filter)
+            recent = [t for t in self._counts.get(tool_name, []) if t > one_hour_ago]
+            self._counts[tool_name] = recent
 
-        if len(recent) >= limit["max_per_hour"]:
-            estimated_spend = len(recent) * limit["cost_per_call"]
+            if len(recent) >= limit["max_per_hour"]:
+                estimated_spend = len(recent) * limit["cost_per_call"]
+                return {
+                    "allowed": False,
+                    "error": "budget_exceeded",
+                    "tool": tool_name,
+                    "calls_this_hour": len(recent),
+                    "max_per_hour": limit["max_per_hour"],
+                    "estimated_spend_usd": round(estimated_spend, 2),
+                    "message": (
+                        f"Budget limit reached for {tool_name}: "
+                        f"{len(recent)}/{limit['max_per_hour']} calls this hour "
+                        f"(~${estimated_spend:.2f}). Wait for the budget window to reset."
+                    ),
+                }
+
+            # Record this call
+            self._counts[tool_name] = [*recent, now]
             return {
-                "allowed": False,
-                "error": "budget_exceeded",
-                "tool": tool_name,
-                "calls_this_hour": len(recent),
+                "allowed": True,
+                "calls_this_hour": len(recent) + 1,
                 "max_per_hour": limit["max_per_hour"],
-                "estimated_spend_usd": round(estimated_spend, 2),
-                "message": (
-                    f"Budget limit reached for {tool_name}: "
-                    f"{len(recent)}/{limit['max_per_hour']} calls this hour "
-                    f"(~${estimated_spend:.2f}). Wait for the budget window to reset."
-                ),
+                "estimated_cost_usd": round(limit["cost_per_call"], 4),
             }
-
-        # Record this call
-        self._counts[tool_name] = [*recent, now]
-        return {
-            "allowed": True,
-            "calls_this_hour": len(recent) + 1,
-            "max_per_hour": limit["max_per_hour"],
-            "estimated_cost_usd": round(limit["cost_per_call"], 4),
-        }

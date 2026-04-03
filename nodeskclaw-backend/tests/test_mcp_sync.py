@@ -277,3 +277,183 @@ async def test_sync_then_uninstall_removes_entries():
     config = json.loads(fs.write_text.call_args[0][1])
     assert config["mcpServers"] == {}
     assert config["skills"] == {}
+
+
+@pytest.mark.asyncio
+async def test_uninstall_flush_excludes_soft_deleted_mcp_rows():
+    """After soft-deleting MCP rows, the remaining query must NOT include them."""
+    from app.services.gene_service import _inject_mcp_servers
+
+    db = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = None
+    db.execute = AsyncMock(return_value=mock_result)
+
+    mcp_servers = [
+        {"name": "server-a", "transport": "stdio", "command": "node"},
+    ]
+    await _inject_mcp_servers(db, "inst-1", "gene-1", mcp_servers)
+    assert db.add.call_count == 1
+
+    added = db.add.call_args[0][0]
+    assert added.name == "server-a"
+    assert db.flush.called
+
+    # Simulate: existing record found (soft-deleted and re-queried should skip)
+    mock_result2 = MagicMock()
+    mock_result2.scalar_one_or_none.return_value = MagicMock()
+    db.execute = AsyncMock(return_value=mock_result2)
+    db.add.reset_mock()
+    await _inject_mcp_servers(db, "inst-1", "gene-1", mcp_servers)
+    assert db.add.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_partial_env_placeholder_logs_warning_not_crash():
+    """'Bearer ${TOKEN}' is a partial placeholder -- should warn, not crash."""
+    from app.services.gene_service import _inject_mcp_servers
+
+    db = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = None
+    db.execute = AsyncMock(return_value=mock_result)
+
+    mcp_servers = [
+        {
+            "name": "api-server",
+            "transport": "stdio",
+            "command": "node",
+            "env": {"AUTH": "Bearer ${TOKEN}"},
+        },
+    ]
+
+    # Should not crash on partial placeholder
+    await _inject_mcp_servers(db, "inst-1", "gene-1", mcp_servers)
+
+    # Should still add the MCP server (not crash)
+    assert db.add.call_count == 1
+    added = db.add.call_args[0][0]
+    # Partial placeholder is kept as-is in the resolved env
+    assert added.env["AUTH"] == "Bearer ${TOKEN}"
+
+
+@pytest.mark.asyncio
+async def test_uninstall_sync_failure_handled_gracefully():
+    """If sync_mcp_servers fails during uninstall, it should not crash."""
+    adapter = OpenClawGeneInstallAdapter()
+    fs = AsyncMock()
+
+    # Make _read_config raise to simulate corrupt config during sync
+    fs.read_text = AsyncMock(return_value="NOT VALID JSON {{{")
+    fs.write_text = AsyncMock()
+
+    # sync_mcp_servers should not raise on corrupt config
+    await adapter.sync_mcp_servers(fs, [])
+    fs.write_text.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_mcp_command_allowlist_rejects_shell():
+    """MCP command allowlist should reject /bin/sh and similar."""
+    from app.services.gene_service import _validate_mcp_command
+
+    # Allowed commands
+    _validate_mcp_command("node")
+    _validate_mcp_command("python3")
+    _validate_mcp_command("/usr/bin/node")
+    _validate_mcp_command("npx")
+    _validate_mcp_command("uvx")
+    _validate_mcp_command("python")
+
+    # Rejected commands
+    import pytest as pt
+    for cmd in ["/bin/sh", "sh", "bash", "/bin/bash", "curl", "wget", "nc"]:
+        with pt.raises(ValueError, match="not in allowlist"):
+            _validate_mcp_command(cmd)
+
+
+@pytest.mark.asyncio
+async def test_tool_allow_deny_list_skips_dangerous_tools():
+    """tool_allow deny list should skip shell, computer, bash, exec, filesystem_write_file."""
+    adapter = OpenClawGeneInstallAdapter()
+    fs = AsyncMock()
+
+    fs.read_text = AsyncMock(return_value=json.dumps({"tools": {"allow": []}}))
+    fs.write_text = AsyncMock()
+
+    # Try to allow dangerous tools
+    await adapter.allow_tools(fs, ["shell", "computer", "bash", "exec", "filesystem_write_file"])
+
+    config = json.loads(fs.write_text.call_args[0][1])
+    # None of the deny-listed tools should appear
+    assert config["tools"]["allow"] == []
+
+
+@pytest.mark.asyncio
+async def test_tool_allow_permits_safe_tools():
+    """Safe tools should be added to the allowlist."""
+    adapter = OpenClawGeneInstallAdapter()
+    fs = AsyncMock()
+
+    fs.read_text = AsyncMock(return_value=json.dumps({"tools": {"allow": []}}))
+    fs.write_text = AsyncMock()
+
+    await adapter.allow_tools(fs, ["nodeskclaw_blackboard", "nodeskclaw_proposals"])
+
+    config = json.loads(fs.write_text.call_args[0][1])
+    assert "nodeskclaw_blackboard" in config["tools"]["allow"]
+    assert "nodeskclaw_proposals" in config["tools"]["allow"]
+
+
+@pytest.mark.asyncio
+async def test_deploy_scripts_rejects_path_traversal():
+    """deploy_scripts should reject filenames with '..' or starting with '/'."""
+    adapter = OpenClawGeneInstallAdapter()
+    fs = AsyncMock()
+
+    import pytest as pt
+    with pt.raises(ValueError, match="Path traversal"):
+        await adapter.deploy_scripts(fs, {"../../../etc/passwd": "malicious"})
+
+    with pt.raises(ValueError, match="Path traversal"):
+        await adapter.deploy_scripts(fs, {"/etc/passwd": "malicious"})
+
+
+def test_slug_regex_rejects_traversal():
+    """Slug regex should reject path traversal attempts like '../../.ssh/keys'."""
+    import re
+    slug_pattern = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
+
+    # Valid slugs
+    assert slug_pattern.match("social-media-browser")
+    assert slug_pattern.match("media-generator")
+    assert slug_pattern.match("my_gene_v2")
+
+    # Invalid slugs (traversal / special chars)
+    assert slug_pattern.match("../../.ssh/keys") is None
+    assert slug_pattern.match("../etc/passwd") is None
+    assert slug_pattern.match(".hidden") is None
+    assert slug_pattern.match("-starts-dash") is None
+    assert slug_pattern.match("UPPERCASE") is None
+    assert slug_pattern.match("has spaces") is None
+    assert slug_pattern.match("has/slash") is None
+
+
+def test_error_redaction_catches_api_key_patterns():
+    """_API_KEY_RE should match sk-xxx and similar patterns."""
+    import re
+    api_key_re = re.compile(r"(sk-[a-zA-Z0-9]{8,}|key-[a-zA-Z0-9]{8,}|Bearer\s+\S{8,})")
+
+    # Should match: sk- followed by 8+ alphanumeric chars
+    assert api_key_re.search("Error: sk-abcdefghij12345")
+    assert api_key_re.search("key-abcdef12345678")
+    assert api_key_re.search("Bearer eyJhbGciOiJSUzI1NiIs")
+
+    # Should redact
+    redacted = api_key_re.sub("[redacted]", "Auth failed: sk-abcdefghij12345 is invalid")
+    assert "sk-abcdefghij" not in redacted
+    assert "[redacted]" in redacted
+
+    # Short patterns should NOT match (below 8 alphanumeric chars after prefix)
+    assert api_key_re.search("sk-short") is None
+    assert api_key_re.search("key-abc") is None

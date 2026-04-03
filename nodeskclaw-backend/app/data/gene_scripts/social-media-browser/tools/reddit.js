@@ -90,9 +90,9 @@ export default {
     return withAuthenticatedPage(pool, PLATFORM, LOGIN_PATTERNS, async (page) => {
       switch (toolName) {
         case "reddit_scan_subreddit":
-          return await scanSubreddit(pool, page, args);
+          return await scanSubreddit(pool, page, args, urlValidator);
         case "reddit_post":
-          return await submitPost(pool, page, args);
+          return await submitPost(pool, page, args, urlValidator);
         case "reddit_reply":
           return await replyToPost(pool, page, args, urlValidator);
         default:
@@ -106,7 +106,7 @@ export default {
 
 const MAX_SCAN_COUNT = 100;
 
-async function scanSubreddit(pool, page, { subreddit, sort = "hot", count = 20 }) {
+async function scanSubreddit(pool, page, { subreddit, sort = "hot", count = 20 }, urlValidator) {
   count = Math.min(Math.max(1, count), MAX_SCAN_COUNT);
   if (!SUBREDDIT_PATTERN.test(subreddit)) {
     return {
@@ -117,7 +117,7 @@ async function scanSubreddit(pool, page, { subreddit, sort = "hot", count = 20 }
 
   const sortPath = sort === "hot" ? "" : `/${sort}`;
   const url = `https://old.reddit.com/r/${subreddit}${sortPath}`;
-  const authErr = await navigateWithAuthCheck(page, url, pool, PLATFORM, LOGIN_PATTERNS);
+  const authErr = await navigateWithAuthCheck(page, url, pool, PLATFORM, LOGIN_PATTERNS, { urlValidator });
   if (authErr) return authErr;
 
   const health = await checkSelectorHealth(page, SELECTORS);
@@ -148,7 +148,7 @@ async function scanSubreddit(pool, page, { subreddit, sort = "hot", count = 20 }
   return { subreddit, sort, posts, count: posts.length };
 }
 
-async function submitPost(pool, page, { subreddit, title, body }) {
+async function submitPost(pool, page, { subreddit, title, body }, urlValidator) {
   if (!SUBREDDIT_PATTERN.test(subreddit)) {
     return {
       error: "invalid_subreddit",
@@ -165,7 +165,7 @@ async function submitPost(pool, page, { subreddit, title, body }) {
   }
 
   const url = `https://old.reddit.com/r/${subreddit}/submit`;
-  const authErr = await navigateWithAuthCheck(page, url, pool, PLATFORM, LOGIN_PATTERNS);
+  const authErr = await navigateWithAuthCheck(page, url, pool, PLATFORM, LOGIN_PATTERNS, { urlValidator });
   if (authErr) return authErr;
 
   // Click the "text" tab to ensure we are on the self-post form
@@ -214,7 +214,7 @@ async function replyToPost(pool, page, { post_url, text }, urlValidator) {
     .replace("new.reddit.com", "old.reddit.com")
     .replace(/^(https:\/\/)reddit\.com/, "$1old.reddit.com");
 
-  const authErr = await navigateWithAuthCheck(page, oldRedditUrl, pool, PLATFORM, LOGIN_PATTERNS);
+  const authErr = await navigateWithAuthCheck(page, oldRedditUrl, pool, PLATFORM, LOGIN_PATTERNS, { urlValidator });
   if (authErr) return authErr;
 
   // Find the comment box at the top of the thread

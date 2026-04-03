@@ -110,7 +110,7 @@ export default {
         case "x_scan_profile":
           return await scanProfile(pool, page, args, urlValidator);
         case "x_post_tweet":
-          return await postTweet(pool, page, args);
+          return await postTweet(pool, page, args, urlValidator);
         case "x_reply":
           return await replyToTweet(pool, page, args, urlValidator);
         case "x_like":
@@ -131,7 +131,7 @@ async function scanTimeline(pool, page, { query, count = 20 }, urlValidator) {
   const url = query
     ? `https://x.com/search?q=${encodeURIComponent(query)}&f=live`
     : "https://x.com/home";
-  const authErr = await navigateWithAuthCheck(page, url, pool, PLATFORM, LOGIN_PATTERNS);
+  const authErr = await navigateWithAuthCheck(page, url, pool, PLATFORM, LOGIN_PATTERNS, { urlValidator });
   if (authErr) return authErr;
 
   await autoScroll(page, count);
@@ -166,7 +166,7 @@ async function scanProfile(pool, page, { username, count = 10 }, urlValidator) {
   }
 
   const authErr = await navigateWithAuthCheck(
-    page, `https://x.com/${username}`, pool, PLATFORM, LOGIN_PATTERNS,
+    page, `https://x.com/${username}`, pool, PLATFORM, LOGIN_PATTERNS, { urlValidator },
   );
   if (authErr) return authErr;
 
@@ -193,13 +193,13 @@ async function scanProfile(pool, page, { username, count = 10 }, urlValidator) {
   return { posts, count: posts.length };
 }
 
-async function postTweet(pool, page, { text }) {
+async function postTweet(pool, page, { text }, urlValidator) {
   if (!text || text.length > 280) {
     return { error: "invalid_input", message: "Tweet text must be 1-280 characters." };
   }
 
   const authErr = await navigateWithAuthCheck(
-    page, "https://x.com/compose/post", pool, PLATFORM, LOGIN_PATTERNS,
+    page, "https://x.com/compose/post", pool, PLATFORM, LOGIN_PATTERNS, { urlValidator },
   );
   if (authErr) return authErr;
 
@@ -219,7 +219,7 @@ async function replyToTweet(pool, page, { tweet_url, text }, urlValidator) {
     return { error: "invalid_input", message: "Reply text must be 1-280 characters." };
   }
 
-  const authErr = await navigateWithAuthCheck(page, tweet_url, pool, PLATFORM, LOGIN_PATTERNS);
+  const authErr = await navigateWithAuthCheck(page, tweet_url, pool, PLATFORM, LOGIN_PATTERNS, { urlValidator });
   if (authErr) return authErr;
 
   const replyBox = page.locator(SELECTORS.composeEditor);
@@ -235,7 +235,7 @@ async function replyToTweet(pool, page, { tweet_url, text }, urlValidator) {
 async function likeTweet(pool, page, { tweet_url }, urlValidator) {
   urlValidator.requireValidUrl(tweet_url, "x");
 
-  const authErr = await navigateWithAuthCheck(page, tweet_url, pool, PLATFORM, LOGIN_PATTERNS);
+  const authErr = await navigateWithAuthCheck(page, tweet_url, pool, PLATFORM, LOGIN_PATTERNS, { urlValidator });
   if (authErr) return authErr;
 
   const likeButton = page.locator(SELECTORS.likeButton);

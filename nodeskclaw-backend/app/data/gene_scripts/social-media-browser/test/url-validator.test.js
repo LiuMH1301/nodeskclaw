@@ -37,7 +37,7 @@ describe("URL Validator", () => {
   it("rejects internal IPs (SSRF protection)", () => {
     const result = validateUrl("https://169.254.169.254/metadata");
     assert.equal(result.valid, false);
-    assert.equal(result.error, "domain_not_allowed");
+    assert.equal(result.error, "ip_not_allowed");
   });
 
   it("rejects cross-platform URLs", () => {
@@ -74,5 +74,35 @@ describe("URL Validator", () => {
     const result = validateUrl("https://medium.com/article", "medium");
     assert.equal(result.valid, false);
     assert.equal(result.error, "unknown_platform");
+  });
+
+  it("rejects IPv4 literal URLs", () => {
+    const result = validateUrl("https://127.0.0.1/secret");
+    assert.equal(result.valid, false);
+    assert.equal(result.error, "ip_not_allowed");
+  });
+
+  it("rejects IPv6 literal URLs", () => {
+    const result = validateUrl("https://[::1]/secret");
+    assert.equal(result.valid, false);
+    assert.equal(result.error, "ip_not_allowed");
+  });
+
+  it("rejects cloud metadata IP", () => {
+    const result = validateUrl("https://169.254.169.254/metadata");
+    assert.equal(result.valid, false);
+    assert.equal(result.error, "ip_not_allowed");
+  });
+
+  it("rejects domain confusion (x.com.evil.com)", () => {
+    const result = validateUrl("https://x.com.evil.com/phish", "x");
+    assert.equal(result.valid, false);
+    assert.equal(result.error, "domain_not_allowed");
+  });
+
+  it("rejects domain confusion (twitter.com.evil.com)", () => {
+    const result = validateUrl("https://twitter.com.evil.com/phish", "x");
+    assert.equal(result.valid, false);
+    assert.equal(result.error, "domain_not_allowed");
   });
 });

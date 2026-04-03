@@ -35,6 +35,10 @@ export function createUrlValidator(platforms) {
     return false;
   }
 
+  function isIpLiteral(hostname) {
+    return /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.startsWith("[");
+  }
+
   function validateUrl(url, platform = null) {
     let parsed;
     try {
@@ -50,6 +54,11 @@ export function createUrlValidator(platforms) {
     // Reject userinfo in URL (e.g. https://x.com@evil.com/)
     if (parsed.username || parsed.password) {
       return { valid: false, error: "invalid_url", message: "URLs with credentials are not allowed." };
+    }
+
+    // Reject IP literal hostnames to prevent SSRF via direct IP access
+    if (isIpLiteral(parsed.hostname)) {
+      return { valid: false, error: "ip_not_allowed", message: "IP literal URLs are not allowed." };
     }
 
     const domains = platform ? platformDomains.get(platform) : null;

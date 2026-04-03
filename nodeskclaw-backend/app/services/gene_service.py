@@ -1211,6 +1211,16 @@ async def install_gene_prerestart(instance_id: str, gene_slug: str) -> None:
 
 _ENV_PLACEHOLDER_RE = re.compile(r"^\$\{(\w+)\}$")
 
+_MCP_COMMAND_ALLOWLIST = {"node", "python3", "npx", "uvx", "python"}
+
+
+def _validate_mcp_command(command: str | None) -> None:
+    if command is None:
+        return
+    base_cmd = command.strip().split()[0].split("/")[-1]
+    if base_cmd not in _MCP_COMMAND_ALLOWLIST:
+        raise ValueError(f"MCP server command '{base_cmd}' not in allowlist: {_MCP_COMMAND_ALLOWLIST}")
+
 
 async def _inject_mcp_servers(
     db: AsyncSession,
@@ -1234,6 +1244,7 @@ async def _inject_mcp_servers(
         name = mcp_def.get("name", "")
         if not name:
             continue
+        _validate_mcp_command(mcp_def.get("command"))
         existing = await db.execute(
             select(InstanceMcpServer).where(
                 InstanceMcpServer.instance_id == instance_id,
@@ -1258,6 +1269,13 @@ async def _inject_mcp_servers(
                         var_name, name,
                     )
                 resolved_env[key] = resolved_val
+            elif "${" in str(val):
+                logger.warning(
+                    "MCP env value for key '%s' in server '%s' contains partial "
+                    "placeholder that cannot be resolved: %s",
+                    key, name, val,
+                )
+                resolved_env[key] = val
             else:
                 resolved_env[key] = val
 
@@ -2291,6 +2309,7 @@ async def _direct_uninstall(
                         )
                         for mcp_row in mcp_rows.scalars().all():
                             mcp_row.soft_delete()
+                        await db.flush()
 
                         # Re-sync remaining active MCP servers to openclaw.json
                         remaining_mcp = await db.execute(
@@ -2300,7 +2319,13 @@ async def _direct_uninstall(
                                 not_deleted(InstanceMcpServer),
                             )
                         )
-                        await adapter.sync_mcp_servers(fs, list(remaining_mcp.scalars().all()))
+                        try:
+                            await adapter.sync_mcp_servers(fs, list(remaining_mcp.scalars().all()))
+                        except Exception:
+                            logger.warning(
+                                "Failed to sync MCP servers after uninstall for %s, config may be stale until next sync",
+                                gene_id,
+                            )
 
                 ig.soft_delete()
                 if gene:

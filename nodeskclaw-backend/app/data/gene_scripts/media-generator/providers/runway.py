@@ -63,6 +63,16 @@ def _safe_client(timeout: int = 60) -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=timeout, follow_redirects=False)
 
 
+def _safe_raise(resp: httpx.Response) -> None:
+    """Raise on HTTP errors without leaking Authorization headers or API keys."""
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        raise RuntimeError(
+            f"API returned {e.response.status_code}: {e.response.text[:200]}"
+        ) from None
+
+
 async def handle(tool_name: str, args: dict, ctx) -> dict:
     """Dispatch Runway tool calls."""
     api_key = _api_key()
@@ -109,7 +119,7 @@ async def _generate_video(api_key: str, args: dict, ctx) -> dict:
             },
             json=payload,
         )
-        resp.raise_for_status()
+        _safe_raise(resp)
         task = resp.json()
 
     task_id = task.get("id")
@@ -128,7 +138,7 @@ async def _generate_video(api_key: str, args: dict, ctx) -> dict:
                     "X-Runway-Version": "2024-11-06",
                 },
             )
-            resp.raise_for_status()
+            _safe_raise(resp)
             status = resp.json()
 
         state = status.get("status", "")
@@ -140,15 +150,18 @@ async def _generate_video(api_key: str, args: dict, ctx) -> dict:
             # Validate output URL before downloading (SSRF protection)
             ctx.url_validator.require_valid_url(output_url)
 
-            # Download and save video
+            # Download video with streaming size check
             async with _safe_client(timeout=120) as client:
-                video_resp = await client.get(output_url)
-                video_resp.raise_for_status()
-                if len(video_resp.content) > MAX_VIDEO_SIZE:
-                    raise ValueError(f"Video exceeds {MAX_VIDEO_SIZE // (1024*1024)}MB limit.")
+                downloaded = bytearray()
+                async with client.stream("GET", output_url) as video_resp:
+                    _safe_raise(video_resp)
+                    async for chunk in video_resp.aiter_bytes():
+                        downloaded.extend(chunk)
+                        if len(downloaded) > MAX_VIDEO_SIZE:
+                            raise ValueError(f"Video exceeds {MAX_VIDEO_SIZE // (1024*1024)}MB limit.")
 
             save_path = ctx.save_path("mp4")
-            save_path.write_bytes(video_resp.content)
+            save_path.write_bytes(bytes(downloaded))
 
             return {
                 "local_path": str(save_path),

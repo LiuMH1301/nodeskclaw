@@ -16,6 +16,7 @@ import os
 
 import httpx
 from mcp.types import Tool
+from pathlib import Path as _Path
 
 
 PROVIDER = {
@@ -100,26 +101,39 @@ def _safe_client(timeout: int = 60) -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=timeout, follow_redirects=False)
 
 
+def _safe_raise(resp: httpx.Response) -> None:
+    """Raise on HTTP errors without leaking Authorization headers or API keys."""
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        raise RuntimeError(
+            f"API returned {e.response.status_code}: {e.response.text[:200]}"
+        ) from None
+
+
 async def _read_image_bytes(url: str, ctx) -> bytes:
     """Read image bytes from validated URL or local path. Max 20MB."""
     ctx.url_validator.require_valid_url(url)
 
     if url.startswith("/"):
-        from pathlib import Path
-        data = Path(url).read_bytes()
-        if len(data) > MAX_IMAGE_SIZE:
+        size = _Path(url).stat().st_size
+        if size > MAX_IMAGE_SIZE:
             raise ValueError(f"Image exceeds {MAX_IMAGE_SIZE // (1024*1024)}MB limit.")
+        data = _Path(url).read_bytes()
         return data
 
     async with _safe_client(timeout=60) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        if len(resp.content) > MAX_IMAGE_SIZE:
-            raise ValueError(f"Image exceeds {MAX_IMAGE_SIZE // (1024*1024)}MB limit.")
-        content_type = resp.headers.get("content-type", "")
-        if content_type and not content_type.startswith("image/"):
-            raise ValueError(f"Expected image content, got {content_type}.")
-        return resp.content
+        downloaded = bytearray()
+        async with client.stream("GET", url) as resp:
+            _safe_raise(resp)
+            content_type = resp.headers.get("content-type", "")
+            if content_type and not content_type.startswith("image/"):
+                raise ValueError(f"Expected image content, got {content_type}.")
+            async for chunk in resp.aiter_bytes():
+                downloaded.extend(chunk)
+                if len(downloaded) > MAX_IMAGE_SIZE:
+                    raise ValueError(f"Image exceeds {MAX_IMAGE_SIZE // (1024*1024)}MB limit.")
+        return bytes(downloaded)
 
 
 async def handle(tool_name: str, args: dict, ctx) -> dict:
@@ -160,7 +174,7 @@ async def _generate_image(api_key: str, args: dict, ctx) -> dict:
                 "response_format": "b64_json",
             },
         )
-        resp.raise_for_status()
+        _safe_raise(resp)
         data = resp.json()
 
     image_data = data["data"][0]
@@ -192,7 +206,7 @@ async def _edit_image(api_key: str, args: dict, ctx) -> dict:
             files={"image": ("image.png", img_bytes, "image/png")},
             data={"prompt": prompt, "n": "1", "size": "1024x1024", "response_format": "b64_json"},
         )
-        resp.raise_for_status()
+        _safe_raise(resp)
         data = resp.json()
 
     image_bytes = base64.b64decode(data["data"][0]["b64_json"])
@@ -210,10 +224,9 @@ async def _describe_image(api_key: str, args: dict, ctx) -> dict:
         {"type": "text", "text": "Describe this image in detail. Focus on composition, mood, colors, and subject matter."},
     ]
     if image_url.startswith("/"):
-        from pathlib import Path
-        img_bytes = Path(image_url).read_bytes()
-        if len(img_bytes) > MAX_IMAGE_SIZE:
+        if _Path(image_url).stat().st_size > MAX_IMAGE_SIZE:
             return {"error": "invalid_input", "message": f"Image exceeds {MAX_IMAGE_SIZE // (1024*1024)}MB limit."}
+        img_bytes = _Path(image_url).read_bytes()
         encoded = base64.b64encode(img_bytes).decode()
         content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}})
     else:
@@ -231,7 +244,7 @@ async def _describe_image(api_key: str, args: dict, ctx) -> dict:
                 "max_tokens": 500,
             },
         )
-        resp.raise_for_status()
+        _safe_raise(resp)
         data = resp.json()
 
     return {"description": data["choices"][0]["message"]["content"]}

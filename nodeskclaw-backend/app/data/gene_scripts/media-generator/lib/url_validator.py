@@ -11,7 +11,9 @@ allowed_domains, and server.py passes all providers to this factory.
 
 from __future__ import annotations
 
+import ipaddress
 import os
+import socket
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -42,6 +44,27 @@ class UrlValidator:
                 return True
         return False
 
+    @staticmethod
+    def _is_ip_literal(hostname: str) -> bool:
+        """Return True if hostname is an IP address literal (v4 or v6)."""
+        try:
+            ipaddress.ip_address(hostname.strip("[]"))
+            return True
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _resolves_to_private(hostname: str) -> bool:
+        """Resolve hostname and reject if any address is private/loopback/link-local/reserved."""
+        try:
+            for info in socket.getaddrinfo(hostname, 443, socket.AF_UNSPEC, socket.SOCK_STREAM):
+                addr = ipaddress.ip_address(info[4][0])
+                if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                    return True
+        except socket.gaierror:
+            return True  # fail-closed: unresolvable hosts are rejected
+        return False
+
     def validate_url(self, url: str) -> dict:
         """Returns {"valid": True, "url": normalized} or {"valid": False, "error": ...}."""
         # Local file path
@@ -61,11 +84,29 @@ class UrlValidator:
         if parsed.username or parsed.password:
             return {"valid": False, "error": "invalid_url", "message": "URLs with credentials are not allowed."}
 
-        if not self._matches_domain(parsed.hostname or ""):
+        hostname = parsed.hostname or ""
+
+        # Reject IP address literals (e.g. https://127.0.0.1/, https://[::1]/)
+        if self._is_ip_literal(hostname):
+            return {
+                "valid": False,
+                "error": "ip_literal_not_allowed",
+                "message": "IP address literals are not allowed. Use a hostname.",
+            }
+
+        if not self._matches_domain(hostname):
             return {
                 "valid": False,
                 "error": "domain_not_allowed",
-                "message": f"Domain {parsed.hostname} is not in the allowlist.",
+                "message": f"Domain {hostname} is not in the allowlist.",
+            }
+
+        # After domain allowlist passes, verify DNS does not resolve to private/internal IPs
+        if self._resolves_to_private(hostname):
+            return {
+                "valid": False,
+                "error": "private_ip_not_allowed",
+                "message": f"Domain {hostname} resolves to a private/internal IP address.",
             }
 
         return {"valid": True, "url": url}

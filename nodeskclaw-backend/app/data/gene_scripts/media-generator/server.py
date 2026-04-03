@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -29,14 +30,19 @@ from mcp.types import TextContent
 from lib.url_validator import create_url_validator
 from lib.cost_tracker import create_cost_tracker
 
+_API_KEY_RE = re.compile(r"(sk-[a-zA-Z0-9]{8,}|key-[a-zA-Z0-9]{8,}|Bearer\s+\S{8,})")
+
 MEDIA_DIR = Path(os.environ.get("MEDIA_DIR", "/root/.deskclaw/media"))
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- Auto-discover provider modules ---
+ALLOWED_PROVIDERS = {"openai", "runway"}
 PROVIDERS_DIR = Path(__file__).parent / "providers"
 providers = []
 for file in sorted(PROVIDERS_DIR.glob("*.py")):
     if file.name.startswith("_"):
+        continue
+    if file.stem not in ALLOWED_PROVIDERS:
         continue
     mod = importlib.import_module(f"providers.{file.stem}")
     providers.append({"module": mod, **mod.PROVIDER})
@@ -98,7 +104,7 @@ async def call_tool(name: str, arguments: dict):
 
     # Check cost budget (records call before API execution -- intentional fail-closed design:
     # failed API calls still count against budget to prevent abuse via error loops)
-    budget = cost_tracker.check_budget(name)
+    budget = await cost_tracker.check_budget(name)
     if not budget["allowed"]:
         return [TextContent(type="text", text=json.dumps(budget))]
 
@@ -109,8 +115,8 @@ async def call_tool(name: str, arguments: dict):
         # URL validation errors
         return [TextContent(type="text", text=json.dumps({"error": "validation_error", "message": str(e)}))]
     except Exception as e:
-        # Sanitize: don't leak paths or API keys (only redact strings > 8 chars to avoid false positives)
-        safe_msg = str(e)
+        # Sanitize: don't leak paths or API keys
+        safe_msg = _API_KEY_RE.sub("[redacted]", str(e))
         for sensitive in [str(Path.home()), str(MEDIA_DIR), os.environ.get("OPENAI_API_KEY", ""), os.environ.get("RUNWAY_API_KEY", "")]:
             if sensitive and len(sensitive) > 8:
                 safe_msg = safe_msg.replace(sensitive, "[redacted]")

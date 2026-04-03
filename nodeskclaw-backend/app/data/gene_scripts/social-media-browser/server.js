@@ -12,7 +12,6 @@ import { createUrlValidator } from "./lib/url-validator.js";
 import { createRateLimiter } from "./lib/rate-limiter.js";
 
 const COOKIES_PATH = process.env.COOKIES_PATH || "/root/.deskclaw/cookies/";
-const pool = createBrowserPool(COOKIES_PATH);
 
 // --- Auto-discover platform modules from tools/ directory ---
 const TOOLS_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), "tools");
@@ -23,6 +22,14 @@ for (const file of platformFiles) {
   const mod = await import(pathToFileURL(path.join(TOOLS_DIR, file)).href);
   platforms.push(mod.default);
 }
+
+// Build platform -> domains lookup for cookie validation
+const platformDomainsMap = new Map();
+for (const p of platforms) {
+  platformDomainsMap.set(p.platform, p.domains);
+}
+
+const pool = createBrowserPool(COOKIES_PATH, platformDomainsMap);
 
 // --- Initialize shared utilities from aggregated platform data ---
 const urlValidator = createUrlValidator(platforms);
