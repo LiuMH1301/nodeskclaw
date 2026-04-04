@@ -108,7 +108,7 @@ class OpenClawGeneInstallAdapter(GeneInstallAdapter):
         await self._write_config(fs, config)
 
     async def sync_mcp_servers(self, fs: RemoteFS, mcp_records: list) -> None:
-        """Sync active InstanceMcpServer records into openclaw.json mcpServers section."""
+        """Sync active InstanceMcpServer records into openclaw.json mcp.servers section."""
         try:
             config = await self._read_config(fs)
         except ValueError:
@@ -130,7 +130,10 @@ class OpenClawGeneInstallAdapter(GeneInstallAdapter):
                 entry["env"] = dict(rec.env)
             mcp_servers[rec.name] = entry
 
-        config = {**config, "mcpServers": mcp_servers}
+        # Remove legacy top-level mcpServers if present
+        config.pop("mcpServers", None)
+        mcp = config.setdefault("mcp", {})
+        mcp["servers"] = mcp_servers
         await self._write_config(fs, config)
 
     async def invalidate_cache(self, fs: RemoteFS, skill_name: str, event: str = "installed") -> None:
